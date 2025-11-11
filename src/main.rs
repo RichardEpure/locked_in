@@ -34,7 +34,7 @@ fn main() {
                         .with_title("Locked In")
                         .with_resizable(true),
                 )
-                .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::LastWindowHides),
+                .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides),
         )
         .launch(App);
 }
