@@ -1,0 +1,146 @@
+@use "./fonts.scss";
+@use "./reset.scss";
+
+body {
+    --bg-primary: #141414;
+    --border-primary: #eef0f2;
+    --primary: #eec643;
+    --button-success: #00a900;
+    --button-danger: #ff0000;
+    background-color: var(--bg-primary);
+    color: white;
+    font-family:
+        "Roboto",
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+    margin: 20px;
+
+    *::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+        background-color: grey;
+        border-radius: 4px;
+
+        &:active {
+            background-color: darkgrey;
+        }
+    }
+}
+
+#links {
+    width: 400px;
+    text-align: left;
+    font-size: x-large;
+    color: white;
+    display: flex;
+    flex-direction: column;
+}
+
+#links a {
+    color: white;
+    text-decoration: none;
+    margin-top: 20px;
+    margin: 10px 0px;
+    border: white 1px solid;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+#links a:hover {
+    background-color: #1f1f1f;
+    cursor: pointer;
+}
+
+#header {
+    max-width: 1200px;
+}
+
+.dialog {
+    background-color: var(--bg-primary);
+    border-radius: 10px;
+    bottom: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    left: 0;
+    margin: 50px;
+    padding: 12px;
+    position: fixed;
+    right: 0;
+    top: 0;
+    z-index: 1000;
+
+    &-backdrop {
+        background-color: rgba(0, 0, 0, 0.8);
+        bottom: 0;
+        content: "";
+        left: 0;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 999;
+    }
+
+    &__content {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        min-height: 0;
+    }
+
+    &__buttons {
+        display: flex;
+        gap: 12px;
+        margin-top: auto;
+    }
+}
+
+.button {
+    --color: var(--primary);
+    background-color: var(--bg-primary);
+    border-radius: 10px;
+    border: 2px solid var(--primary);
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 10px;
+    text-align: center;
+
+    &--success {
+        --color: var(--button-success);
+        border-color: var(--color);
+        color: var(--color);
+    }
+
+    &--danger {
+        --color: var(--button-danger);
+        border-color: var(--color);
+        color: var(--color);
+    }
+
+    &:hover {
+        background-color: var(--color);
+        color: black;
+        cursor: pointer;
+    }
+
+    &:active {
+        filter: brightness(70%);
+    }
+}
+
+.hid-devices {
+    overflow-y: auto;
+    height: 100%;
+
+    &__list {
+        display: flex;
+        flex-direction: column;
+    }
+}

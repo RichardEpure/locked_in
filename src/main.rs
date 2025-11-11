@@ -1,3 +1,4 @@
+mod components;
 mod config;
 mod hid;
 mod win;
@@ -14,8 +15,10 @@ use dioxus::{
     prelude::*,
 };
 
+use crate::components::{dialog::Dialog, hid_devices::HidDevices};
+
 const FAVICON: Asset = asset!("/assets/favicon.ico");
-const MAIN_CSS: Asset = asset!("/assets/main.scss");
+const MAIN_SCSS: Asset = asset!("/assets/styles/main.scss");
 const HEADER_SVG: Asset = asset!("/assets/header.svg");
 
 static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
@@ -80,14 +83,22 @@ fn App() -> Element {
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Link { rel: "stylesheet", href: MAIN_SCSS }
         DeviceList {}
+    }
+}
+
+#[component]
+fn Test() -> Element {
+    rsx! {
+        h1 { "Test Component" }
     }
 }
 
 #[component]
 fn DeviceList() -> Element {
     let mut devices = use_signal(hid::get_devices);
+
     let focused_window_title = FOCUSED_WINDOW_SIGNAL
         .read()
         .title
@@ -99,6 +110,8 @@ fn DeviceList() -> Element {
         .clone()
         .unwrap_or("null".to_string());
 
+    let mut show_add_device_modal = use_signal(|| false);
+
     rsx! {
         h2 { "Window data: {focused_window_title} - {focused_window_class}" }
         h1 {
@@ -107,23 +120,26 @@ fn DeviceList() -> Element {
         }
         button {
             onclick: move |_| {
+                show_add_device_modal.set(true);
+            },
+            "Add Device"
+        }
+        button {
+            onclick: move |_| {
                 devices.set(hid::get_devices());
             },
             "Refresh Device List"
         }
-        ul {
-            for device in devices.read().clone() {
-                li {
-                    "{device.vendor_id} - ",
-                    "{device.product_id} - ",
-                    "{device.manufacturer_string} - ",
-                    "{device.product_string}"
-                    for usage in device.usages {
-                        div {
-                            "Usage Page: {usage.usage_page}, Usage: {usage.usage}"
-                        }
-                    }
-                }
+        if *show_add_device_modal.read() {
+            Dialog {
+                title: "Add Device".to_string(),
+                on_ok: move |_| {
+                    show_add_device_modal.set(false);
+                },
+                on_cancel: move |_| {
+                    show_add_device_modal.set(false);
+                },
+                HidDevices {},
             }
         }
     }
