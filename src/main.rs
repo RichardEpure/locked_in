@@ -97,7 +97,7 @@ fn Test() -> Element {
 
 #[component]
 fn DeviceList() -> Element {
-    let mut devices = use_signal(hid::get_devices);
+    let mut hid_devices = use_signal(hid::get_devices);
 
     let focused_window_title = FOCUSED_WINDOW_SIGNAL
         .read()
@@ -126,20 +126,33 @@ fn DeviceList() -> Element {
         }
         button {
             onclick: move |_| {
-                devices.set(hid::get_devices());
+                hid_devices.set(hid::get_devices());
             },
             "Refresh Device List"
+        }
+        ul {
+            for device in CONFIG_SIGNAL.read().devices.iter() {
+                li {
+                    "{device.name}"
+                }
+            }
         }
         if *show_add_device_modal.read() {
             Dialog {
                 title: "Add Device".to_string(),
+                hide_buttons: true,
                 on_ok: move |_| {
                     show_add_device_modal.set(false);
                 },
                 on_cancel: move |_| {
                     show_add_device_modal.set(false);
                 },
-                HidDevices {},
+                HidDevices {
+                    on_select: move |device: hid::HidMetadata| {
+                        show_add_device_modal.set(false);
+                        println!("Selected device: {:?}", device);
+                    }
+                },
             }
         }
     }

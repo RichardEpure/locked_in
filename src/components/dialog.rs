@@ -5,6 +5,7 @@ pub struct DialogProps {
     pub title: String,
     pub on_ok: EventHandler<()>,
     pub on_cancel: EventHandler<()>,
+    pub hide_buttons: Option<bool>,
     pub children: Element,
 }
 
@@ -18,20 +19,27 @@ pub fn Dialog(props: DialogProps) -> Element {
             class: "dialog",
             h2 { "{props.title}" }
             div {
+                class: "dialog__close",
+                onclick: move |_| props.on_cancel.call(()),
+                "x",
+            }
+            div {
                 class: "dialog__content",
                 {props.children}
             }
-            div {
-                class: "dialog__buttons",
-                button {
-                    class: "button button--success",
-                    onclick: move |_| props.on_ok.call(()),
-                    "OK"
-                }
-                button {
-                    class: "button button--danger",
-                    onclick: move |_| props.on_cancel.call(()),
-                    "Cancel"
+            if !props.hide_buttons.unwrap_or_default() {
+                div {
+                    class: "dialog__buttons",
+                    button {
+                        class: "button button--success",
+                        onclick: move |_| props.on_ok.call(()),
+                        "OK"
+                    }
+                    button {
+                        class: "button button--danger",
+                        onclick: move |_| props.on_cancel.call(()),
+                        "Cancel"
+                    }
                 }
             }
         }

@@ -2,8 +2,13 @@ use dioxus::prelude::*;
 
 use crate::hid;
 
+#[derive(Props, PartialEq, Clone)]
+pub struct HidDevicesProps {
+    pub on_select: EventHandler<hid::HidMetadata>,
+}
+
 #[component]
-pub fn HidDevices() -> Element {
+pub fn HidDevices(props: HidDevicesProps) -> Element {
     let devices = use_signal(hid::get_devices);
 
     rsx! {
@@ -13,15 +18,17 @@ pub fn HidDevices() -> Element {
                 class: "hid-devices__list",
                 for device in devices.read().clone() {
                     li {
-                        "{device.vendor_id} - ",
-                        "{device.product_id} - ",
-                        "{device.manufacturer_string} - ",
+                        class: "hid-devices__item",
+                        onclick: move |_| {
+                            props.on_select.call(device.clone());
+                        },
+                        "{device.manufacturer_string} ",
                         "{device.product_string}"
-                        for usage in device.usages {
-                            div {
-                                "Usage Page: {usage.usage_page}, Usage: {usage.usage}"
-                            }
-                        }
+                        // for usage in device.usages.iter() {
+                        //     div {
+                        //         "Usage Page: {usage.usage_page}, Usage: {usage.usage}"
+                        //     }
+                        // }
                     }
                 }
             }

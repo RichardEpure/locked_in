@@ -3,6 +3,8 @@
 
 body {
     --bg-primary: #141414;
+    --bg-hover: #2e2e2e;
+    --bg-active: #232323;
     --border-primary: #eef0f2;
     --primary: #eec643;
     --button-success: #00a900;
@@ -87,6 +89,23 @@ body {
         z-index: 999;
     }
 
+    &__close {
+        border-radius: 10px;
+        border: 1px solid grey;
+        color: grey;
+        cursor: pointer;
+        padding: 8px 12px;
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        user-select: none;
+
+        &:hover {
+            color: white;
+            border-color: white;
+        }
+    }
+
     &__content {
         display: flex;
         flex-direction: column;
@@ -142,5 +161,19 @@ body {
     &__list {
         display: flex;
         flex-direction: column;
+    }
+
+    &__item {
+        border-bottom: 1px solid grey;
+        cursor: pointer;
+        padding: 8px;
+
+        &:hover {
+            background-color: var(--bg-hover);
+        }
+
+        &:active {
+            background-color: var(--bg-active);
+        }
     }
 }
