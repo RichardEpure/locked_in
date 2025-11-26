@@ -184,5 +184,12 @@ unsafe extern "system" fn win_event_proc(
         handle_hex: Some(format!("{:x}", hwnd.0 as usize)),
     };
 
+    // Ignore alt + tab 'window'
+    if let Some(class) = &window.class
+        && class == "XamlExplorerHostIslandWindow"
+    {
+        return;
+    }
+
     set_focused_window(window);
 }
