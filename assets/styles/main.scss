@@ -1,6 +1,10 @@
 @use "./fonts.scss";
 @use "./reset.scss";
 
+// Components
+@use "./components/dialog";
+@use "./components/hid_devices";
+
 body {
     --bg-primary: #141414;
     --bg-hover: #2e2e2e;
@@ -62,64 +66,6 @@ body {
     max-width: 1200px;
 }
 
-.dialog {
-    background-color: var(--bg-primary);
-    border-radius: 10px;
-    bottom: 0;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    left: 0;
-    margin: 50px;
-    padding: 12px;
-    position: fixed;
-    right: 0;
-    top: 0;
-    z-index: 1000;
-
-    &-backdrop {
-        background-color: rgba(0, 0, 0, 0.8);
-        bottom: 0;
-        content: "";
-        left: 0;
-        position: fixed;
-        right: 0;
-        top: 0;
-        z-index: 999;
-    }
-
-    &__close {
-        border-radius: 10px;
-        border: 1px solid grey;
-        color: grey;
-        cursor: pointer;
-        padding: 8px 12px;
-        position: absolute;
-        right: 8px;
-        top: 8px;
-        user-select: none;
-
-        &:hover {
-            color: white;
-            border-color: white;
-        }
-    }
-
-    &__content {
-        display: flex;
-        flex-direction: column;
-        flex-grow: 1;
-        min-height: 0;
-    }
-
-    &__buttons {
-        display: flex;
-        gap: 12px;
-        margin-top: auto;
-    }
-}
-
 .button {
     --color: var(--primary);
     background-color: var(--bg-primary);
@@ -151,29 +97,5 @@ body {
 
     &:active {
         filter: brightness(70%);
-    }
-}
-
-.hid-devices {
-    overflow-y: auto;
-    height: 100%;
-
-    &__list {
-        display: flex;
-        flex-direction: column;
-    }
-
-    &__item {
-        border-bottom: 1px solid grey;
-        cursor: pointer;
-        padding: 8px;
-
-        &:hover {
-            background-color: var(--bg-hover);
-        }
-
-        &:active {
-            background-color: var(--bg-active);
-        }
     }
 }
