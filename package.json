@@ -1,0 +1,27 @@
+{
+    "name": "locked_in",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "css:build": "sass --load-path=node_modules assets/styles/main.scss assets/styles/main.css",
+        "css:watch": "sass --load-path=node_modules assets/styles/main.scss assets/styles/main.css --watch"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/RichardEpure/locked_in.git"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "bugs": {
+        "url": "https://github.com/RichardEpure/locked_in/issues"
+    },
+    "homepage": "https://github.com/RichardEpure/locked_in#readme",
+    "dependencies": {
+        "@picocss/pico": "^2.1.1"
+    },
+    "devDependencies": {
+        "sass": "^1.97.1"
+    }
+}

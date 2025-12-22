@@ -139,6 +139,7 @@ fn DeviceList() -> Element {
         }
         if *show_add_device_modal.read() {
             Dialog {
+                open: *show_add_device_modal.read(),
                 title: "Add Device".to_string(),
                 hide_buttons: true,
                 on_ok: move |_| {

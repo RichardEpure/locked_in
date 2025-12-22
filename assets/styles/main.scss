@@ -1,20 +1,13 @@
 @use "./fonts.scss";
-@use "./reset.scss";
+
+@use "@picocss/pico/scss/pico" with (
+    $theme-color: "amber"
+);
 
 // Components
-@use "./components/dialog";
 @use "./components/hid_devices";
 
 body {
-    --bg-primary: #141414;
-    --bg-hover: #2e2e2e;
-    --bg-active: #232323;
-    --border-primary: #eef0f2;
-    --primary: #eec643;
-    --button-success: #00a900;
-    --button-danger: #ff0000;
-    background-color: var(--bg-primary);
-    color: white;
     font-family:
         "Roboto",
         system-ui,
@@ -23,79 +16,4 @@ body {
         Arial,
         sans-serif;
     margin: 20px;
-
-    *::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    *::-webkit-scrollbar-thumb {
-        background-color: grey;
-        border-radius: 4px;
-
-        &:active {
-            background-color: darkgrey;
-        }
-    }
-}
-
-#links {
-    width: 400px;
-    text-align: left;
-    font-size: x-large;
-    color: white;
-    display: flex;
-    flex-direction: column;
-}
-
-#links a {
-    color: white;
-    text-decoration: none;
-    margin-top: 20px;
-    margin: 10px 0px;
-    border: white 1px solid;
-    border-radius: 5px;
-    padding: 10px;
-}
-
-#links a:hover {
-    background-color: #1f1f1f;
-    cursor: pointer;
-}
-
-#header {
-    max-width: 1200px;
-}
-
-.button {
-    --color: var(--primary);
-    background-color: var(--bg-primary);
-    border-radius: 10px;
-    border: 2px solid var(--primary);
-    color: white;
-    font-size: 16px;
-    font-weight: bold;
-    padding: 10px;
-    text-align: center;
-
-    &--success {
-        --color: var(--button-success);
-        border-color: var(--color);
-        color: var(--color);
-    }
-
-    &--danger {
-        --color: var(--button-danger);
-        border-color: var(--color);
-        color: var(--color);
-    }
-
-    &:hover {
-        background-color: var(--color);
-        color: black;
-        cursor: pointer;
-    }
-
-    &:active {
-        filter: brightness(70%);
-    }
 }

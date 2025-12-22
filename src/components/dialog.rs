@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 #[derive(Props, PartialEq, Clone)]
 pub struct DialogProps {
+    pub open: bool,
     pub title: String,
     pub on_ok: EventHandler<()>,
     pub on_cancel: EventHandler<()>,
@@ -12,33 +13,33 @@ pub struct DialogProps {
 #[component]
 pub fn Dialog(props: DialogProps) -> Element {
     rsx! {
-        div {
-            class: "dialog-backdrop",
-        }
-        div {
-            class: "dialog",
-            h2 { "{props.title}" }
-            div {
-                class: "dialog__close",
-                onclick: move |_| props.on_cancel.call(()),
-                "x",
-            }
-            div {
-                class: "dialog__content",
-                {props.children}
-            }
-            if !props.hide_buttons.unwrap_or_default() {
-                div {
-                    class: "dialog__buttons",
+        dialog {
+            open: props.open,
+            article {
+                header {
                     button {
-                        class: "button button--success",
-                        onclick: move |_| props.on_ok.call(()),
-                        "OK"
-                    }
-                    button {
-                        class: "button button--danger",
+                        aria_label: "Close",
+                        "rel": "prev",
                         onclick: move |_| props.on_cancel.call(()),
-                        "Cancel"
+                    }
+                    p {
+                        strong {
+                            "{props.title}"
+                        }
+                    }
+                }
+                {props.children}
+                if !props.hide_buttons.unwrap_or_default() {
+                    footer {
+                        button {
+                            class: "secondary",
+                            onclick: move |_| props.on_ok.call(()),
+                            "Cancel"
+                        }
+                        button {
+                            onclick: move |_| props.on_cancel.call(()),
+                            "Confirm"
+                        }
                     }
                 }
             }
