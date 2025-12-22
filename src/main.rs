@@ -113,31 +113,32 @@ fn DeviceList() -> Element {
     let mut show_add_device_modal = use_signal(|| false);
 
     rsx! {
-        h2 { "Window data: {focused_window_title} - {focused_window_class}" }
-        h1 {
-            id: "device-list",
-            "Device List"
-        }
-        button {
-            onclick: move |_| {
-                show_add_device_modal.set(true);
-            },
-            "Add Device"
-        }
-        button {
-            onclick: move |_| {
-                hid_devices.set(hid::get_devices());
-            },
-            "Refresh Device List"
-        }
-        ul {
-            for device in CONFIG_SIGNAL.read().devices.iter() {
-                li {
-                    "{device.name}"
+        main {
+            class: "container",
+            h2 { "Window data: {focused_window_title} - {focused_window_class}" }
+            h1 {
+                id: "device-list",
+                "Device List"
+            }
+            button {
+                onclick: move |_| {
+                    show_add_device_modal.set(true);
+                },
+                "Add Device"
+            }
+            button {
+                onclick: move |_| {
+                    hid_devices.set(hid::get_devices());
+                },
+                "Refresh Device List"
+            }
+            ul {
+                for device in CONFIG_SIGNAL.read().devices.iter() {
+                    li {
+                        "{device.name}"
+                    }
                 }
             }
-        }
-        if *show_add_device_modal.read() {
             Dialog {
                 open: *show_add_device_modal.read(),
                 title: "Add Device".to_string(),

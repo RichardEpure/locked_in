@@ -7,13 +7,7 @@
 // Components
 @use "./components/hid_devices";
 
-body {
-    font-family:
-        "Roboto",
-        system-ui,
-        -apple-system,
-        "Segoe UI",
-        Arial,
-        sans-serif;
-    margin: 20px;
+:root {
+    --pico-font-family-sans-serif:
+        "Roboto", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
 }
