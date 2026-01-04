@@ -3,6 +3,8 @@ mod config;
 mod hid;
 mod win;
 
+use std::ops::Deref;
+
 use dioxus::{
     desktop::{
         Config, WindowBuilder,
@@ -132,10 +134,39 @@ fn DeviceList() -> Element {
                 },
                 "Refresh Device List"
             }
+            button {
+                onclick: move |_| {
+                    let mut config = CONFIG_SIGNAL.write();
+                    let window_meta = win::WindowMetadata {
+                        title: Some("Example Title".to_string()),
+                        class: None,
+                        pid: None,
+                        exe: None,
+                        handle_hex: None,
+                    };
+
+                    let rule = config::Rule {
+                        name: "Example Rule".to_string(),
+                        event: config::Event::FocusedWindowChanged(config::FocusedWindowChangedConfig {
+                            inclusions: vec![window_meta],
+                            exclusions: vec![],
+                        }),
+                        devices: vec![],
+                    };
+                    config.rules.push(rule);
+                },
+                "Add rule"
+            }
+            button {
+                onclick: move |_| {
+                    let _ = config::save_config(CONFIG_SIGNAL.read().deref());
+                },
+                "Save Config"
+            }
             ul {
-                for device in CONFIG_SIGNAL.read().devices.iter() {
+                for rule in CONFIG_SIGNAL.read().rules.iter() {
                     li {
-                        "{device.name}"
+                        "{rule.name}"
                     }
                 }
             }

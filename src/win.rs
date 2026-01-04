@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
     os::windows::ffi::OsStringExt,
@@ -24,7 +25,7 @@ use windows::{
     core::PWSTR,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WindowMetadata {
     pub title: Option<String>,
     pub class: Option<String>,
