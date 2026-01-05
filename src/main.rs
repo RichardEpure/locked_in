@@ -17,7 +17,9 @@ use dioxus::{
     prelude::*,
 };
 
-use crate::components::{dialog::Dialog, hid_devices::HidDevices, rules::Rules};
+use crate::components::{
+    dialog::Dialog, edit_rule::EditRule, hid_devices::HidDevices, rules::Rules,
+};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -113,6 +115,9 @@ fn DeviceList() -> Element {
         .unwrap_or("null".to_string());
 
     let mut show_add_device_modal = use_signal(|| false);
+    let mut show_edit_rule_modal = use_signal(|| false);
+
+    let mut rule_to_edit: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
         main {
@@ -161,17 +166,27 @@ fn DeviceList() -> Element {
                     "Save Config"
                 }
             }
-            Rules {},
+            Rules {
+                on_edit: move |rule_name: String| {
+                    rule_to_edit.set(Some(rule_name));
+                    show_edit_rule_modal.set(true);
+                }
+            },
+            Dialog {
+                open: *show_edit_rule_modal.read(),
+                title: "Rule".to_string(),
+                on_ok: move |_| show_edit_rule_modal.set(false),
+                on_cancel: move |_| show_edit_rule_modal.set(false),
+                EditRule {
+                    rule_name: rule_to_edit.read().deref().clone()
+                }
+            },
             Dialog {
                 open: *show_add_device_modal.read(),
                 title: "Add Device".to_string(),
                 hide_buttons: true,
-                on_ok: move |_| {
-                    show_add_device_modal.set(false);
-                },
-                on_cancel: move |_| {
-                    show_add_device_modal.set(false);
-                },
+                on_ok: move |_| show_add_device_modal.set(false),
+                on_cancel: move |_| show_add_device_modal.set(false),
                 HidDevices {
                     on_select: move |device: hid::HidMetadata| {
                         show_add_device_modal.set(false);

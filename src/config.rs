@@ -14,7 +14,7 @@ use crate::win::WindowMetadata;
 
 const CONFIG_PATH: &str = "config.toml";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     FocusedWindowChanged(FocusedWindowChangedConfig),
@@ -38,7 +38,7 @@ impl Serialize for Event {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FocusedWindowChangedConfig {
     #[serde(default)]
     pub inclusions: Vec<WindowMetadata>,
@@ -46,7 +46,7 @@ pub struct FocusedWindowChangedConfig {
     pub exclusions: Vec<WindowMetadata>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Device {
     pub name: String,
     pub vid: u16,
@@ -57,7 +57,7 @@ pub struct Device {
     pub report_id: u8,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Rule {
     pub name: String,
     pub event: Event,

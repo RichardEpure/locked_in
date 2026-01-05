@@ -2,10 +2,15 @@ use std::ops::{Deref, DerefMut};
 
 use dioxus::prelude::*;
 
-use crate::CONFIG_SIGNAL;
+use crate::{CONFIG_SIGNAL, config};
+
+#[derive(Props, PartialEq, Clone)]
+pub struct RulesProps {
+    pub on_edit: EventHandler<String>,
+}
 
 #[component]
-pub fn Rules() -> Element {
+pub fn Rules(props: RulesProps) -> Element {
     let rule_names: Vec<String> = CONFIG_SIGNAL
         .read()
         .deref()
@@ -30,7 +35,13 @@ pub fn Rules() -> Element {
                         div {
                             role: "group",
                             class: "buttons",
-                            button { "Edit" }
+                            button {
+                                onclick: {
+                                    let name = name.clone();
+                                    move |_| props.on_edit.call(name.clone())
+                                },
+                                "Edit"
+                            }
                             button {
                                 class: "danger",
                                 onclick: move |_| {
