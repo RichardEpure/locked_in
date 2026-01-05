@@ -11,6 +11,7 @@
 :root {
     --pico-font-family-sans-serif:
         "Roboto", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    --pico-del-color-hover: hsl(2, 46%, 70%);
 }
 
 body,
@@ -31,7 +32,7 @@ button.danger {
     background-color: var(--pico-del-color);
 
     &:hover {
-        background: color-mix(in srgb, var(--pico-del-color) 65%, transparent);
+        background: var(--pico-del-color-hover);
     }
 
     &:focus-visible {
