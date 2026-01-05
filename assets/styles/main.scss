@@ -6,8 +6,36 @@
 
 // Components
 @use "./components/hid_devices";
+@use "./components/rules";
 
 :root {
     --pico-font-family-sans-serif:
         "Roboto", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}
+
+body,
+main,
+#main {
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+}
+
+button.danger {
+    border-color: var(--pico-del-color);
+    background-color: var(--pico-del-color);
+
+    &:hover {
+        background: color-mix(in srgb, var(--pico-del-color) 65%, transparent);
+    }
+
+    &:focus-visible {
+        box-shadow: 0 0 0 var(--pico-outline-width)
+            color-mix(in srgb, var(--pico-del-color) 35%, transparent);
+    }
 }

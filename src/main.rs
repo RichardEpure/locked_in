@@ -3,7 +3,7 @@ mod config;
 mod hid;
 mod win;
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use dioxus::{
     desktop::{
@@ -17,7 +17,7 @@ use dioxus::{
     prelude::*,
 };
 
-use crate::components::{dialog::Dialog, hid_devices::HidDevices};
+use crate::components::{dialog::Dialog, hid_devices::HidDevices, rules::Rules};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -26,7 +26,7 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
     Signal::global(win::get_focused_window);
 
-static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(config::init_config);
+pub static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(config::Config::load);
 
 fn main() {
     let _foreground_hook = win::start_foreground_hook();
@@ -118,58 +118,50 @@ fn DeviceList() -> Element {
         main {
             class: "container",
             h2 { "Window data: {focused_window_title} - {focused_window_class}" }
-            h1 {
-                id: "device-list",
-                "Device List"
-            }
-            button {
-                onclick: move |_| {
-                    show_add_device_modal.set(true);
-                },
-                "Add Device"
-            }
-            button {
-                onclick: move |_| {
-                    hid_devices.set(hid::get_devices());
-                },
-                "Refresh Device List"
-            }
-            button {
-                onclick: move |_| {
-                    let mut config = CONFIG_SIGNAL.write();
-                    let window_meta = win::WindowMetadata {
-                        title: Some("Example Title".to_string()),
-                        class: None,
-                        pid: None,
-                        exe: None,
-                        handle_hex: None,
-                    };
+            div {
+                button {
+                    onclick: move |_| {
+                        show_add_device_modal.set(true);
+                    },
+                    "Add Device"
+                }
+                button {
+                    onclick: move |_| {
+                        hid_devices.set(hid::get_devices());
+                    },
+                    "Refresh Device List"
+                }
+                button {
+                    onclick: move |_| {
+                        let mut config = CONFIG_SIGNAL.write();
+                        let window_meta = win::WindowMetadata {
+                            title: Some("Example Title".to_string()),
+                            class: None,
+                            pid: None,
+                            exe: None,
+                            handle_hex: None,
+                        };
 
-                    let rule = config::Rule {
-                        name: "Example Rule".to_string(),
-                        event: config::Event::FocusedWindowChanged(config::FocusedWindowChangedConfig {
-                            inclusions: vec![window_meta],
-                            exclusions: vec![],
-                        }),
-                        devices: vec![],
-                    };
-                    config.rules.push(rule);
-                },
-                "Add rule"
-            }
-            button {
-                onclick: move |_| {
-                    let _ = config::save_config(CONFIG_SIGNAL.read().deref());
-                },
-                "Save Config"
-            }
-            ul {
-                for rule in CONFIG_SIGNAL.read().rules.iter() {
-                    li {
-                        "{rule.name}"
-                    }
+                        let rule = config::Rule {
+                            name: "Example Rule".to_string(),
+                            event: config::Event::FocusedWindowChanged(config::FocusedWindowChangedConfig {
+                                inclusions: vec![window_meta],
+                                exclusions: vec![],
+                            }),
+                            devices: vec![],
+                        };
+                        config.rules.push(rule);
+                    },
+                    "Add rule"
+                }
+                button {
+                    onclick: move |_| {
+                        let _ = CONFIG_SIGNAL.read().deref().save();
+                    },
+                    "Save Config"
                 }
             }
+            Rules {},
             Dialog {
                 open: *show_add_device_modal.read(),
                 title: "Add Device".to_string(),

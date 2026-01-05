@@ -71,86 +71,93 @@ pub struct Config {
     pub rules: Vec<Rule>,
 }
 
-pub fn init_config() -> Config {
-    let path = env::current_dir()
-        .unwrap_or_else(|e| panic!("Failed to get config path: {}", e))
-        .join(CONFIG_PATH);
+impl Config {
+    pub fn load() -> Self {
+        let path = env::current_dir()
+            .unwrap_or_else(|e| panic!("Failed to get current directory: {}", e))
+            .join(CONFIG_PATH);
 
-    if path.is_file() {
-        return load_config();
+        if path.is_file() {
+            return Figment::new()
+                .merge(Toml::file(CONFIG_PATH))
+                .extract::<Config>()
+                .map_err(Box::new)
+                .unwrap_or_else(|e| panic!("Failed to load config.toml: {}", e));
+        }
+
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to create config directory: {}. {}",
+                    parent.display(),
+                    e
+                )
+            });
+        }
+
+        let _ = fs::OpenOptions::new().create_new(true);
+
+        Self::default()
     }
 
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create config directory: {}. {}",
-                parent.display(),
-                e
+    pub fn save(&self) -> Result<()> {
+        fn tmp_path_for(dest: &Path) -> PathBuf {
+            let mut name = dest.file_name().unwrap_or_default().to_os_string();
+            name.push(".tmp");
+
+            let tmp_name = {
+                // prefix with dot
+                let mut s = std::ffi::OsString::from(".");
+                s.push(name);
+                s
+            };
+
+            dest.with_file_name(tmp_name)
+        }
+
+        let path = env::current_dir()
+            .context("Failed to get current directory")?
+            .join(CONFIG_PATH);
+
+        let toml_string =
+            toml::to_string_pretty(self).context("Failed to serialize config to TOML")?;
+
+        let tmp_path = tmp_path_for(&path);
+
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .with_context(|| {
+                    format!("Failed to open temp config file: {}", tmp_path.display())
+                })?;
+
+            file.write_all(toml_string.as_bytes()).with_context(|| {
+                format!("Failed to write config TOML to: {}", tmp_path.display())
+            })?;
+
+            file.flush()
+                .with_context(|| format!("Failed to flush config file: {}", tmp_path.display()))?;
+        }
+
+        fs::rename(&tmp_path, &path).with_context(|| {
+            format!(
+                "Failed to replace config file (rename {} -> {})",
+                tmp_path.display(),
+                path.display(),
             )
-        });
+        })?;
+
+        Ok(())
     }
 
-    let _ = fs::OpenOptions::new().create_new(true);
-
-    Config::default()
-}
-
-pub fn load_config() -> Config {
-    Figment::new()
-        .merge(Toml::file(CONFIG_PATH))
-        .extract::<Config>()
-        .map_err(Box::new)
-        .unwrap_or_else(|e| panic!("Failed to load config.toml: {}", e))
-}
-
-pub fn save_config(config: &Config) -> Result<()> {
-    let path = env::current_dir()
-        .context("Failed to get current directory")?
-        .join(CONFIG_PATH);
-
-    let toml_string =
-        toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
-
-    let tmp_path = tmp_path_for(&path);
-
-    {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&tmp_path)
-            .with_context(|| format!("Failed to open temp config file: {}", tmp_path.display()))?;
-
-        file.write_all(toml_string.as_bytes())
-            .with_context(|| format!("Failed to write config TOML to: {}", tmp_path.display()))?;
-
-        file.flush()
-            .with_context(|| format!("Failed to flush config file: {}", tmp_path.display()))?;
+    pub fn delete_role(&mut self, name: &str) {
+        if let Some(index) = self.rules.iter().position(|r| r.name == name) {
+            self.rules.remove(index);
+        }
     }
-
-    fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to replace config file (rename {} -> {})",
-            tmp_path.display(),
-            path.display(),
-        )
-    })?;
-
-    Ok(())
-}
-
-fn tmp_path_for(dest: &Path) -> PathBuf {
-    let mut name = dest.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
-
-    let tmp_name = {
-        // prefix with dot
-        let mut s = std::ffi::OsString::from(".");
-        s.push(name);
-        s
-    };
-
-    dest.with_file_name(tmp_name)
 }

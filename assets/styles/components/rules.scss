@@ -1,0 +1,20 @@
+.rules {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+
+    &__list {
+        overflow-y: auto;
+    }
+
+    &__item {
+        display: flex;
+        align-items: center;
+
+        .buttons {
+            margin: auto 0 auto auto;
+            width: auto;
+        }
+    }
+}
