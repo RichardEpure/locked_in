@@ -2,9 +2,9 @@ use dioxus::prelude::*;
 
 #[derive(Props, PartialEq, Clone)]
 pub struct DialogProps {
-    pub open: bool,
+    pub open: Option<bool>,
     pub title: String,
-    pub on_ok: EventHandler<()>,
+    pub on_ok: Option<EventHandler<()>>,
     pub on_cancel: EventHandler<()>,
     pub hide_buttons: Option<bool>,
     pub children: Element,
@@ -14,7 +14,7 @@ pub struct DialogProps {
 pub fn Dialog(props: DialogProps) -> Element {
     rsx! {
         dialog {
-            open: props.open,
+            open: props.open.unwrap_or(true),
             article {
                 header {
                     button {
@@ -33,7 +33,11 @@ pub fn Dialog(props: DialogProps) -> Element {
                     footer {
                         button {
                             class: "secondary",
-                            onclick: move |_| props.on_ok.call(()),
+                            onclick: move |_| {
+                                if let Some(on_ok) = props.on_ok {
+                                    on_ok.call(());
+                                }
+                            },
                             "Cancel"
                         }
                         button {

@@ -14,10 +14,17 @@ use crate::win::WindowMetadata;
 
 const CONFIG_PATH: &str = "config.toml";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, strum_macros::EnumIter, strum_macros::Display)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum Event {
     FocusedWindowChanged(FocusedWindowChangedConfig),
+}
+
+impl Default for Event {
+    fn default() -> Self {
+        Self::FocusedWindowChanged(FocusedWindowChangedConfig::default())
+    }
 }
 
 impl Serialize for Event {
@@ -38,7 +45,7 @@ impl Serialize for Event {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct FocusedWindowChangedConfig {
     #[serde(default)]
     pub inclusions: Vec<WindowMetadata>,
@@ -57,7 +64,7 @@ pub struct Device {
     pub report_id: u8,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Rule {
     pub name: String,
     pub event: Event,
@@ -155,9 +162,17 @@ impl Config {
         Ok(())
     }
 
-    pub fn delete_role(&mut self, name: &str) {
+    pub fn delete_rule(&mut self, name: &str) {
         if let Some(index) = self.rules.iter().position(|r| r.name == name) {
             self.rules.remove(index);
         }
+    }
+
+    pub fn get_rule_index(&self, name: &str) -> Option<usize> {
+        self.rules.iter().position(|r| r.name == name)
+    }
+
+    pub fn get_rule(&self, name: &str) -> Option<&Rule> {
+        self.rules.iter().find(|r| r.name == name)
     }
 }

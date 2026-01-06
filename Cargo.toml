@@ -12,6 +12,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 toml = { version = "0.9.10", features = ["serde"] }
 anyhow = "1.0.100"
 tokio = "1.48.0"
+strum = "0.27.2"
+strum_macros = "0.27.2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

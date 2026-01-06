@@ -1,37 +1,72 @@
-use std::ops::Deref;
-
 use dioxus::prelude::*;
+use strum::IntoEnumIterator;
 
-use crate::{CONFIG_SIGNAL, config::Rule};
+use crate::{
+    CONFIG_SIGNAL,
+    config::{self},
+};
 
 #[derive(Props, PartialEq, Clone)]
 pub struct EditRuleProps {
     pub rule_name: Option<String>,
+    pub on_submit: EventHandler<()>,
 }
 
 #[component]
 pub fn EditRule(props: EditRuleProps) -> Element {
-    let mut rule: Option<Rule> = props.rule_name.map(|rule_name| {
-        CONFIG_SIGNAL
-            .read()
-            .deref()
-            .rules
-            .iter()
-            .find(|r| r.name == rule_name)
-            .unwrap_or_else(|| panic!("Trying to edit a rule {} that doesn't exist.", rule_name))
-            .clone()
+    let mut rule = use_signal(|| {
+        if let Some(rule_name) = props.rule_name.as_ref()
+            && let Some(existing_rule) = CONFIG_SIGNAL.read().get_rule(rule_name)
+        {
+            existing_rule.clone()
+        } else {
+            config::Rule::default()
+        }
     });
 
-    let name = if rule.is_some() {
-        rule.unwrap().name.clone()
-    } else {
-        "test".to_string()
-    };
-
     rsx! {
-        div {
+        form {
             class: "edit-rule",
-            "{name}"
+            fieldset {
+                label {
+                    "Name"
+                    input {
+                        name: "name",
+                        placeholder: "rule name",
+                        value: "{rule().name}",
+                        oninput: move |e| rule.write().name = e.value()
+                    }
+                }
+                label {
+                    "Event",
+                    select {
+                        name: "event",
+                        aria_label: "Select an event",
+                        for event in config::Event::iter().map(|event| event.to_string()) {
+                            option {
+                                selected: if event == rule().event.to_string() { true } else { false },
+                                "{event}"
+                            }
+                        }
+                    }
+                }
+                label {
+                    "Devices",
+                }
+            }
+            input {
+                type: "submit",
+                onclick: move |_| {
+                    let mut config = CONFIG_SIGNAL.write();
+                    if let Some(rule_name) = props.rule_name.as_ref()
+                        && let Some(index) = config.get_rule_index(rule_name)
+                    {
+                        config.rules[index] = rule().clone();
+                    }
+                    props.on_submit.call(());
+                },
+                "Submit",
+            }
         }
     }
 }

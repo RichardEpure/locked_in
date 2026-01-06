@@ -3,8 +3,6 @@ mod config;
 mod hid;
 mod win;
 
-use std::ops::{Deref, DerefMut};
-
 use dioxus::{
     desktop::{
         Config, WindowBuilder,
@@ -132,29 +130,13 @@ fn DeviceList() -> Element {
                 button {
                     onclick: move |_| {
                         let mut config = CONFIG_SIGNAL.write();
-                        let window_meta = win::WindowMetadata {
-                            title: Some("Example Title".to_string()),
-                            class: None,
-                            pid: None,
-                            exe: None,
-                            handle_hex: None,
-                        };
-
-                        let rule = config::Rule {
-                            name: "Example Rule".to_string(),
-                            event: config::Event::FocusedWindowChanged(config::FocusedWindowChangedConfig {
-                                inclusions: vec![window_meta],
-                                exclusions: vec![],
-                            }),
-                            devices: vec![],
-                        };
-                        config.rules.push(rule);
+                        config.rules.push(config::Rule::default());
                     },
                     "Add rule"
                 }
                 button {
                     onclick: move |_| {
-                        let _ = CONFIG_SIGNAL.read().deref().save();
+                        let _ = CONFIG_SIGNAL.read().save();
                     },
                     "Save Config"
                 }
@@ -165,15 +147,17 @@ fn DeviceList() -> Element {
                     show_edit_rule_modal.set(true);
                 }
             },
-            Dialog {
-                open: *show_edit_rule_modal.read(),
-                title: "Rule".to_string(),
-                on_ok: move |_| show_edit_rule_modal.set(false),
-                on_cancel: move |_| show_edit_rule_modal.set(false),
-                EditRule {
-                    rule_name: rule_to_edit.read().deref().clone()
-                }
-            },
+            if show_edit_rule_modal() {
+                Dialog {
+                    title: "Rule".to_string(),
+                    hide_buttons: true,
+                    on_cancel: move |_| show_edit_rule_modal.set(false),
+                    EditRule {
+                        rule_name: rule_to_edit().clone(),
+                        on_submit: move |_| show_edit_rule_modal.set(false),
+                    }
+                },
+            }
             Dialog {
                 open: *show_add_device_modal.read(),
                 title: "Add Device".to_string(),
