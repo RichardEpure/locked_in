@@ -93,13 +93,6 @@ fn App() -> Element {
 }
 
 #[component]
-fn Test() -> Element {
-    rsx! {
-        h1 { "Test Component" }
-    }
-}
-
-#[component]
 fn DeviceList() -> Element {
     let mut hid_devices = use_signal(hid::get_devices);
 
