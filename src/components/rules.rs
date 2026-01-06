@@ -1,8 +1,6 @@
-use std::ops::{Deref, DerefMut};
-
 use dioxus::prelude::*;
 
-use crate::{CONFIG_SIGNAL, config};
+use crate::CONFIG_SIGNAL;
 
 #[derive(Props, PartialEq, Clone)]
 pub struct RulesProps {
@@ -13,7 +11,6 @@ pub struct RulesProps {
 pub fn Rules(props: RulesProps) -> Element {
     let rule_names: Vec<String> = CONFIG_SIGNAL
         .read()
-        .deref()
         .rules
         .iter()
         .map(|r| r.name.clone())
@@ -45,7 +42,7 @@ pub fn Rules(props: RulesProps) -> Element {
                             button {
                                 class: "danger",
                                 onclick: move |_| {
-                                    CONFIG_SIGNAL.write().deref_mut().delete_role(&name);
+                                    CONFIG_SIGNAL.write().delete_rule(&name);
                                 },
                                 "Delete"
                             }
