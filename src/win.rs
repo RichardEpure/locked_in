@@ -31,7 +31,6 @@ pub struct WindowMetadata {
     pub class: Option<String>,
     pub pid: Option<u32>,
     pub exe: Option<PathBuf>,
-    pub handle_hex: Option<String>,
 }
 
 pub struct WinHook {
@@ -182,7 +181,6 @@ unsafe extern "system" fn win_event_proc(
         class: hwnd_class(hwnd),
         pid: hwnd_pid(hwnd),
         exe: hwnd_pid(hwnd).and_then(process_exe),
-        handle_hex: Some(format!("{:x}", hwnd.0 as usize)),
     };
 
     // Ignore alt + tab 'window'
