@@ -14,7 +14,14 @@ use crate::win::WindowMetadata;
 
 const CONFIG_PATH: &str = "config.toml";
 
-#[derive(Debug, Clone, Deserialize, strum_macros::EnumIter, strum_macros::Display)]
+#[derive(
+    Debug,
+    Clone,
+    Deserialize,
+    strum_macros::EnumIter,
+    strum_macros::EnumString,
+    strum_macros::Display,
+)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Event {
@@ -174,5 +181,9 @@ impl Config {
 
     pub fn get_rule(&self, name: &str) -> Option<&Rule> {
         self.rules.iter().find(|r| r.name == name)
+    }
+
+    pub fn get_mut_rule(&mut self, name: &str) -> Option<&mut Rule> {
+        self.rules.iter_mut().find(|r| r.name == name)
     }
 }

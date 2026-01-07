@@ -3,26 +3,27 @@ use strum::IntoEnumIterator;
 
 use crate::{
     CONFIG_SIGNAL,
+    components::events::event_configurator::EventConfigurator,
     config::{self},
 };
 
 #[derive(Props, PartialEq, Clone)]
 pub struct EditRuleProps {
-    pub rule_name: Option<String>,
+    pub rule_name: String,
     pub on_submit: EventHandler<()>,
 }
 
 #[component]
 pub fn EditRule(props: EditRuleProps) -> Element {
     let mut rule = use_signal(|| {
-        if let Some(rule_name) = props.rule_name.as_ref()
-            && let Some(existing_rule) = CONFIG_SIGNAL.read().get_rule(rule_name)
-        {
+        if let Some(existing_rule) = CONFIG_SIGNAL.read().get_rule(&props.rule_name) {
             existing_rule.clone()
         } else {
             config::Rule::default()
         }
     });
+
+    let event_signal = use_signal(|| rule().event);
 
     rsx! {
         form {
@@ -42,14 +43,22 @@ pub fn EditRule(props: EditRuleProps) -> Element {
                     select {
                         name: "event",
                         aria_label: "Select an event",
+                        oninput: move |e| {
+                            if let Ok(event) = e.value().parse::<config::Event>() {
+                                rule.write().event = event;
+                            }
+                        },
                         for event in config::Event::iter().map(|event| event.to_string()) {
                             option {
                                 selected: if event == rule().event.to_string() { true } else { false },
                                 "{event}"
                             }
                         }
+                    },
+                    EventConfigurator {
+                        event: event_signal,
                     }
-                }
+                },
                 label {
                     "Devices",
                 }
@@ -58,8 +67,8 @@ pub fn EditRule(props: EditRuleProps) -> Element {
                 type: "submit",
                 onclick: move |_| {
                     let mut config = CONFIG_SIGNAL.write();
-                    if let Some(rule_name) = props.rule_name.as_ref()
-                        && let Some(index) = config.get_rule_index(rule_name)
+                    rule.write().event = event_signal.read().clone();
+                    if let Some(index) = config.get_rule_index(&props.rule_name)
                     {
                         config.rules[index] = rule().clone();
                     }

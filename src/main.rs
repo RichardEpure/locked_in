@@ -147,13 +147,13 @@ fn DeviceList() -> Element {
                     show_edit_rule_modal.set(true);
                 }
             },
-            if show_edit_rule_modal() {
+            if let Some(rule_to_edit) = rule_to_edit() && show_edit_rule_modal() {
                 Dialog {
                     title: "Rule".to_string(),
                     hide_buttons: true,
                     on_cancel: move |_| show_edit_rule_modal.set(false),
                     EditRule {
-                        rule_name: rule_to_edit().clone(),
+                        rule_name: rule_to_edit,
                         on_submit: move |_| show_edit_rule_modal.set(false),
                     }
                 },
