@@ -73,8 +73,7 @@ pub fn EditWindow(props: EditWindowProps) -> Element {
             }
             input {
                 type: "submit",
-                onclick: move |e| {
-                    e.prevent_default();
+                onclick: move |_| {
                     props.on_submit.call(());
                 },
                 "Submit",
