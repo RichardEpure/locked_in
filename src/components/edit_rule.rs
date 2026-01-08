@@ -3,7 +3,7 @@ use strum::IntoEnumIterator;
 
 use crate::{
     CONFIG_SIGNAL,
-    components::events::event_configurator::EventConfigurator,
+    components::{devices::Devices, events::event_configurator::EventConfigurator},
     config::{self},
 };
 
@@ -23,7 +23,8 @@ pub fn EditRule(props: EditRuleProps) -> Element {
         }
     });
 
-    let event_signal = use_signal(|| rule().event);
+    let mut event_signal = use_signal(|| rule().event);
+    let mut devices_signal = use_signal(|| rule().devices);
 
     rsx! {
         form {
@@ -61,13 +62,17 @@ pub fn EditRule(props: EditRuleProps) -> Element {
                 },
                 label {
                     "Devices",
+                    Devices {
+                        devices: devices_signal,
+                    }
                 }
             }
             input {
                 type: "submit",
                 onclick: move |_| {
                     let mut config = CONFIG_SIGNAL.write();
-                    rule.write().event = event_signal.read().clone();
+                    rule.write().event = std::mem::take(&mut *event_signal.write());
+                    rule.write().devices = std::mem::take(&mut *devices_signal.write());
                     if let Some(index) = config.get_rule_index(&props.rule_name)
                     {
                         config.rules[index] = rule().clone();

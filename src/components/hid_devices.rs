@@ -1,46 +1,75 @@
 use dioxus::prelude::*;
 
-use crate::hid;
+use crate::{config, hid};
 
 #[derive(Props, PartialEq, Clone)]
 pub struct HidDevicesProps {
-    pub on_select: EventHandler<hid::HidMetadata>,
+    pub device: Signal<config::Device>,
+    pub on_submit: EventHandler<()>,
 }
 
 #[component]
 pub fn HidDevices(props: HidDevicesProps) -> Element {
+    let mut device = props.device;
     let devices = use_signal(hid::get_devices);
-    let mut selected = use_signal(|| None as Option<u16>); // HidMetadata product_id
+    let mut hid_device = use_signal(|| None::<hid::HidMetadata>);
+    let mut usage_pair = use_signal(|| None::<hid::UsagePair>);
 
     rsx! {
-        div {
+        form {
             class: "hid-devices",
-            ul {
-                class: "hid-devices__list",
-                for device in devices.read().clone() {
-                    li {
-                        class: "hid-devices__item",
-                        class: if *selected.read() == Some(device.product_id) {
-                            "hid-devices__item--selected"
-                        },
-                        onclick: move |_| {
-                            // props.on_select.call(device.clone());
-                            selected.set(Some(device.product_id));
-                        },
-                        "{device.manufacturer_string} ",
-                        "{device.product_string}"
-                        if *selected.read() == Some(device.product_id) {
-                            ul {
-                                class: "hid-devices__item-usages",
-                                for usage in device.usages.iter() {
-                                    li {
-                                        class: "hid-devices__item-usage",
-                                        "Usage Page: {usage.usage_page}, Usage: {usage.usage}"
+            for device in devices.read().iter() {
+                details {
+                    class: "hid-device",
+                    summary { "{device.manufacturer_string} - {device.product_string}" }
+                    h6 { "PID: {device.product_id}" },
+                    h6 { "VID: {device.vendor_id}" },
+                    fieldset {
+                        class: "hid-device__usages",
+                        legend { "Usages" }
+                        for usage in device.usages.iter() {
+                            label {
+                                input {
+                                    type: "radio",
+                                    name: "usage",
+                                    onchange: {
+                                        let mut device = device.clone();
+                                        let mut usage = usage.clone();
+                                        move |_| {
+                                            hid_device.set(Some(std::mem::take(&mut device)));
+                                            usage_pair.set(Some(std::mem::take(&mut usage)));
+                                        }
                                     }
                                 }
+                                "Usage Page: {usage.usage_page} - Usage: {usage.usage}"
                             }
                         }
                     }
+                }
+            }
+            input {
+                type: "submit",
+                onclick: move |_| {
+                    if let Some(hid_device) = &*hid_device.read()
+                        && let Some(usage_pair) = &*usage_pair.read()
+                    {
+                        device.set(config::Device {
+                            name: if !hid_device.product_string.is_empty() {
+                                hid_device.product_string.clone()
+                            } else if !hid_device.manufacturer_string.is_empty() {
+                                hid_device.manufacturer_string.clone()
+                            } else {
+                                "Untitled".to_string()
+                            },
+                            vid: hid_device.vendor_id,
+                            pid: hid_device.product_id,
+                            usage_page: usage_pair.usage_page,
+                            usage: usage_pair.usage,
+                            report_length: u16::default(),
+                            report_id: u8::default(),
+                        });
+                    }
+                    props.on_submit.call(());
                 }
             }
         }

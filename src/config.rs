@@ -60,14 +60,14 @@ pub struct FocusedWindowChangedConfig {
     pub exclusions: Vec<WindowMetadata>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Device {
     pub name: String,
     pub vid: u16,
     pub pid: u16,
     pub usage_page: u16,
     pub usage: u16,
-    pub report_length: usize,
+    pub report_length: u16,
     pub report_id: u8,
 }
 

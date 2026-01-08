@@ -4,7 +4,7 @@ use super::config::Device;
 use anyhow::{Context, Result};
 use hidapi::{HidApi, HidDevice};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct HidMetadata {
     pub vendor_id: u16,
     pub product_id: u16,
@@ -13,7 +13,7 @@ pub struct HidMetadata {
     pub usages: HashSet<UsagePair>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct UsagePair {
     pub usage_page: u16,
     pub usage: u16,
@@ -39,7 +39,7 @@ pub fn find_device(device: &Device) -> Result<HidDevice> {
 }
 
 pub fn send_report(hid_device: &HidDevice, device: &Device, report: &[u8]) -> Result<usize> {
-    if report.len() != device.report_length {
+    if report.len() != device.report_length as usize {
         panic!(
             "report length {} != expected {}",
             report.len(),
@@ -47,7 +47,7 @@ pub fn send_report(hid_device: &HidDevice, device: &Device, report: &[u8]) -> Re
         )
     }
 
-    let mut bytes_to_write = vec![0u8; device.report_length + 1];
+    let mut bytes_to_write = vec![0u8; device.report_length as usize + 1];
     bytes_to_write[0] = device.report_id;
     bytes_to_write[1..].copy_from_slice(report);
 

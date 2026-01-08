@@ -15,9 +15,7 @@ use dioxus::{
     prelude::*,
 };
 
-use crate::components::{
-    dialog::Dialog, edit_rule::EditRule, hid_devices::HidDevices, rules::Rules,
-};
+use crate::components::{dialog::Dialog, edit_rule::EditRule, rules::Rules};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -92,8 +90,6 @@ fn App() -> Element {
 
 #[component]
 fn DeviceList() -> Element {
-    let mut hid_devices = use_signal(hid::get_devices);
-
     let focused_window_title = FOCUSED_WINDOW_SIGNAL
         .read()
         .title
@@ -105,7 +101,6 @@ fn DeviceList() -> Element {
         .clone()
         .unwrap_or("null".to_string());
 
-    let mut show_add_device_modal = use_signal(|| false);
     let mut show_edit_rule_modal = use_signal(|| false);
 
     let mut rule_to_edit: Signal<Option<String>> = use_signal(|| None);
@@ -115,18 +110,6 @@ fn DeviceList() -> Element {
             class: "container",
             h2 { "Window data: {focused_window_title} - {focused_window_class}" }
             div {
-                button {
-                    onclick: move |_| {
-                        show_add_device_modal.set(true);
-                    },
-                    "Add Device"
-                }
-                button {
-                    onclick: move |_| {
-                        hid_devices.set(hid::get_devices());
-                    },
-                    "Refresh Device List"
-                }
                 button {
                     onclick: move |_| {
                         let mut config = CONFIG_SIGNAL.write();
@@ -155,19 +138,6 @@ fn DeviceList() -> Element {
                     EditRule {
                         rule_name: rule_to_edit,
                         on_submit: move |_| show_edit_rule_modal.set(false),
-                    }
-                },
-            }
-            Dialog {
-                open: *show_add_device_modal.read(),
-                title: "Add Device".to_string(),
-                hide_buttons: true,
-                on_ok: move |_| show_add_device_modal.set(false),
-                on_cancel: move |_| show_add_device_modal.set(false),
-                HidDevices {
-                    on_select: move |device: hid::HidMetadata| {
-                        show_add_device_modal.set(false);
-                        println!("Selected device: {:?}", device);
                     }
                 },
             }
