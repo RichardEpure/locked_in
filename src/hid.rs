@@ -22,38 +22,41 @@ pub struct UsagePair {
 static HID_API: LazyLock<HidApi> =
     LazyLock::new(|| HidApi::new().expect("Failed to create HID API instance"));
 
-pub fn find_device(device: &Device) -> Result<HidDevice> {
-    for device_info in HID_API.device_list() {
-        if device_info.vendor_id() == device.vid
-            && device_info.product_id() == device.pid
-            && device_info.usage_page() == device.usage_page
-            && device_info.usage() == device.usage
-        {
-            return device_info
-                .open_device(&HID_API)
-                .with_context(|| "Failed to open device");
+impl Device {
+    pub fn find_hid_device(&self) -> Result<HidDevice> {
+        for device_info in HID_API.device_list() {
+            if device_info.vendor_id() == self.vid
+                && device_info.product_id() == self.pid
+                && device_info.usage_page() == self.usage_page
+                && device_info.usage() == self.usage
+            {
+                return device_info
+                    .open_device(&HID_API)
+                    .with_context(|| "Failed to open device");
+            }
         }
+        anyhow::bail!("Device not found")
     }
 
-    anyhow::bail!("Device not found")
-}
+    pub fn send_report(&self, report: &[u8]) -> Result<usize> {
+        let hid_device = self.find_hid_device()?;
 
-pub fn send_report(hid_device: &HidDevice, device: &Device, report: &[u8]) -> Result<usize> {
-    if report.len() != device.report_length as usize {
-        panic!(
-            "report length {} != expected {}",
-            report.len(),
-            device.report_length
-        )
+        if report.len() != self.report_length as usize {
+            panic!(
+                "report length {} != expected {}",
+                report.len(),
+                self.report_length
+            )
+        }
+
+        let mut bytes_to_write = vec![0u8; self.report_length as usize + 1];
+        bytes_to_write[0] = self.report_id;
+        bytes_to_write[1..].copy_from_slice(report);
+
+        hid_device
+            .write(&bytes_to_write)
+            .with_context(|| "Failed to write to device")
     }
-
-    let mut bytes_to_write = vec![0u8; device.report_length as usize + 1];
-    bytes_to_write[0] = device.report_id;
-    bytes_to_write[1..].copy_from_slice(report);
-
-    hid_device
-        .write(&bytes_to_write)
-        .with_context(|| "Failed to write to device")
 }
 
 pub fn get_devices() -> Vec<HidMetadata> {
