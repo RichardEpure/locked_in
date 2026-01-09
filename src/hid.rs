@@ -40,18 +40,25 @@ impl Device {
 
     pub fn send_report(&self, report: &[u8]) -> Result<usize> {
         let hid_device = self.find_hid_device()?;
+        let report_length = self.report_length as usize;
 
-        if report.len() != self.report_length as usize {
-            panic!(
-                "report length {} != expected {}",
+        if report.len() > report_length {
+            anyhow::bail!(
+                "report length {} > expected {}",
                 report.len(),
-                self.report_length
+                report_length
             )
         }
 
-        let mut bytes_to_write = vec![0u8; self.report_length as usize + 1];
+        let mut bytes_to_write = vec![
+            0u8;
+            report_length
+                .checked_add(1)
+                .context("report_length too large (overflow)")?
+        ];
         bytes_to_write[0] = self.report_id;
-        bytes_to_write[1..].copy_from_slice(report);
+        let end = 1 + report.len();
+        bytes_to_write[1..end].copy_from_slice(report);
 
         hid_device
             .write(&bytes_to_write)
