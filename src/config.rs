@@ -46,6 +46,8 @@ impl Serialize for Event {
                 map.serialize_entry("type", "focused_window_changed")?;
                 map.serialize_entry("inclusions", &cfg.inclusions)?;
                 map.serialize_entry("exclusions", &cfg.exclusions)?;
+                map.serialize_entry("on_match_reports", &cfg.on_match_reports)?;
+                map.serialize_entry("on_no_match_reports", &cfg.on_no_match_reports)?;
             }
         }
         map.end()
@@ -54,10 +56,10 @@ impl Serialize for Event {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct FocusedWindowChangedConfig {
-    #[serde(default)]
     pub inclusions: Vec<WindowMetadata>,
-    #[serde(default)]
     pub exclusions: Vec<WindowMetadata>,
+    pub on_match_reports: Vec<Vec<u8>>,
+    pub on_no_match_reports: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -75,7 +77,6 @@ pub struct Device {
 pub struct Rule {
     pub name: String,
     pub event: Event,
-    #[serde(default)]
     pub devices: Vec<Device>,
 }
 

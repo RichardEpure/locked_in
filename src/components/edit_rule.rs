@@ -60,6 +60,7 @@ pub fn EditRule(props: EditRuleProps) -> Element {
                         event: event_signal,
                     }
                 },
+                hr {},
                 label {
                     "Devices",
                     Devices {
