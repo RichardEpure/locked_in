@@ -88,15 +88,6 @@ fn App() -> Element {
         }
     });
 
-    rsx! {
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-        DeviceList {}
-    }
-}
-
-#[component]
-fn DeviceList() -> Element {
     let focused_window_title = FOCUSED_WINDOW_SIGNAL
         .read()
         .title
@@ -113,6 +104,8 @@ fn DeviceList() -> Element {
     let mut rule_to_edit: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
+        document::Link { rel: "icon", href: FAVICON }
+        document::Link { rel: "stylesheet", href: MAIN_CSS }
         main {
             class: "container",
             h2 { "Window data: {focused_window_title} - {focused_window_class}" }
