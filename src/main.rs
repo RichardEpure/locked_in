@@ -88,6 +88,11 @@ fn App() -> Element {
         }
     });
 
+    rsx!(Main {})
+}
+
+#[component]
+fn Main() -> Element {
     let focused_window_title = FOCUSED_WINDOW_SIGNAL
         .read()
         .title
