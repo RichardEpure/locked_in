@@ -29,7 +29,6 @@ use windows::{
 pub struct WindowMetadata {
     pub title: Option<String>,
     pub class: Option<String>,
-    pub pid: Option<u32>,
     pub exe: Option<PathBuf>,
 }
 
@@ -179,7 +178,6 @@ unsafe extern "system" fn win_event_proc(
     let window = WindowMetadata {
         title: hwnd_title(hwnd),
         class: hwnd_class(hwnd),
-        pid: hwnd_pid(hwnd),
         exe: hwnd_pid(hwnd).and_then(process_exe),
     };
 
