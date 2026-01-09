@@ -25,10 +25,12 @@ struct EditTarget {
 #[component]
 pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
     let mut show_window_editor = use_signal(|| false);
-    let mut show_report_editor = use_signal(|| false);
     let mut draft_window = use_signal(win::WindowMetadata::default);
-    let mut draft_report = use_signal(Vec::<u8>::default);
     let mut edit_target = use_signal(|| None::<EditTarget>);
+
+    let mut show_report_editor = use_signal(|| false);
+    let mut draft_report = use_signal(Vec::<u8>::default);
+    let mut on_match = use_signal(|| true);
 
     let event_read = props.event.read();
     let config::Event::FocusedWindowChanged(event_cfg) = event_read.deref() else {
@@ -80,15 +82,13 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                                 }
                                 button {
                                     class: "danger",
-                                    onclick: {
+                                    onclick: move |_| {
                                         let mut event_signal = props.event;
-                                        move |_| {
-                                            let mut event = event_signal.write();
-                                            if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event
-                                                && i < event_cfg.inclusions.len()
-                                            {
-                                                    event_cfg.inclusions.remove(i);
-                                            }
+                                        let mut event = event_signal.write();
+                                        if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event
+                                            && i < event_cfg.inclusions.len()
+                                        {
+                                                event_cfg.inclusions.remove(i);
                                         }
                                     },
                                     "Delete"
@@ -149,15 +149,13 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                                 }
                                 button {
                                     class: "danger",
-                                    onclick: {
+                                    onclick: move |_| {
                                         let mut event_signal = props.event;
-                                        move |_| {
-                                            let mut event = event_signal.write();
-                                            if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event
-                                                && i < event_cfg.exclusions.len()
-                                            {
-                                                    event_cfg.exclusions.remove(i);
-                                            }
+                                        let mut event = event_signal.write();
+                                        if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event
+                                            && i < event_cfg.exclusions.len()
+                                        {
+                                                event_cfg.exclusions.remove(i);
                                         }
                                     },
                                     "Delete"
@@ -190,6 +188,11 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                             button {
                                 class: "danger",
                                 onclick: move |_| {
+                                    let mut event_signal = props.event;
+                                    let mut event = event_signal.write();
+                                    if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                                        event_cfg.on_match_reports.remove(i);
+                                    }
                                 },
                                 "Delete"
                             }
@@ -199,16 +202,34 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                         class: "outline",
                         onclick: move |_| {
                             show_report_editor.set(true);
+                            on_match.set(true);
                         },
                         "Add"
                     }
                 }
                 div {
                     h6 { "On No Match Reports" }
+                    for (i, report) in event_cfg.on_no_match_reports.iter().enumerate() {
+                        details {
+                            summary { "{hex::encode(report)}" }
+                            button {
+                                class: "danger",
+                                onclick: move |_| {
+                                    let mut event_signal = props.event;
+                                    let mut event = event_signal.write();
+                                    if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                                        event_cfg.on_no_match_reports.remove(i);
+                                    }
+                                },
+                                "Delete"
+                            }
+                        }
+                    }
                     button {
                         class: "outline",
                         onclick: move |_| {
                             show_report_editor.set(true);
+                            on_match.set(false);
                         },
                         "Add"
                     }
@@ -222,38 +243,36 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                 on_cancel: move |_| show_window_editor.set(false),
                 EditWindow {
                     window: draft_window,
-                    on_submit: {
+                    on_submit: move || {
                         let mut event_signal = props.event;
-                        move || {
-                            let Some(target) = *edit_target.read() else {
-                                show_window_editor.set(false);
-                                return;
-                            };
-                            let new_window = std::mem::take(&mut *draft_window.write());
-                            let mut event = event_signal.write();
-                            if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
-                                match (target.kind, target.index) {
-                                    (WindowListKind::Inclusion, Some(i)) => {
-                                        if i < event_cfg.inclusions.len() {
-                                            event_cfg.inclusions[i] = new_window;
-                                        }
-                                    },
-                                    (WindowListKind::Inclusion, None) => {
-                                        event_cfg.inclusions.push(new_window);
-                                    },
-                                    (WindowListKind::Exclusion, Some(i)) => {
-                                        if i < event_cfg.exclusions.len() {
-                                            event_cfg.exclusions[i] = new_window;
-                                        }
-                                    },
-                                    (WindowListKind::Exclusion, None) => {
-                                        event_cfg.exclusions.push(new_window);
+                        let Some(target) = *edit_target.read() else {
+                            show_window_editor.set(false);
+                            return;
+                        };
+                        let new_window = std::mem::take(&mut *draft_window.write());
+                        let mut event = event_signal.write();
+                        if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                            match (target.kind, target.index) {
+                                (WindowListKind::Inclusion, Some(i)) => {
+                                    if i < event_cfg.inclusions.len() {
+                                        event_cfg.inclusions[i] = new_window;
                                     }
+                                },
+                                (WindowListKind::Inclusion, None) => {
+                                    event_cfg.inclusions.push(new_window);
+                                },
+                                (WindowListKind::Exclusion, Some(i)) => {
+                                    if i < event_cfg.exclusions.len() {
+                                        event_cfg.exclusions[i] = new_window;
+                                    }
+                                },
+                                (WindowListKind::Exclusion, None) => {
+                                    event_cfg.exclusions.push(new_window);
                                 }
                             }
-                            edit_target.set(None);
-                            show_window_editor.set(false);
                         }
+                        edit_target.set(None);
+                        show_window_editor.set(false);
                     }
                 }
             }
@@ -262,16 +281,18 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
             Dialog {
                 title: "Report".to_string(),
                 on_cancel: move |_| show_report_editor.set(false),
-                on_ok: {
+                on_ok: move |_| {
                     let mut event_signal = props.event;
-                    move |_| {
-                        let mut event = event_signal.write();
-                        if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                    let mut event = event_signal.write();
+                    if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                        if on_match() {
                             event_cfg.on_match_reports.push(std::mem::take(&mut *draft_report.write()));
+                        } else {
+                            event_cfg.on_no_match_reports.push(std::mem::take(&mut *draft_report.write()));
                         }
-                        show_report_editor.set(false);
-                        draft_report.set(Vec::<u8>::default());
                     }
+                    show_report_editor.set(false);
+                    draft_report.set(Vec::<u8>::default());
                 },
                 input {
                     name: "report",
