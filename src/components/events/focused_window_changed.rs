@@ -285,10 +285,11 @@ pub fn FocusedWindowChanged(props: EventConfiguratorProps) -> Element {
                     let mut event_signal = props.event;
                     let mut event = event_signal.write();
                     if let config::Event::FocusedWindowChanged(event_cfg) = &mut *event {
+                        let report = std::mem::take(&mut *draft_report.write());
                         if on_match() {
-                            event_cfg.on_match_reports.push(std::mem::take(&mut *draft_report.write()));
+                            event_cfg.on_match_reports.push(report);
                         } else {
-                            event_cfg.on_no_match_reports.push(std::mem::take(&mut *draft_report.write()));
+                            event_cfg.on_no_match_reports.push(report);
                         }
                     }
                     show_report_editor.set(false);
