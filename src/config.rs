@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::win::WindowMetadata;
+use crate::win::{FOCUSED_WINDOW, WindowMetadata};
 
 const CONFIG_PATH: &str = "config.toml";
 
@@ -78,6 +78,50 @@ pub struct Rule {
     pub name: String,
     pub event: Event,
     pub devices: Vec<Device>,
+}
+
+impl Rule {
+    pub fn trigger(&self) {
+        match &self.event {
+            Event::FocusedWindowChanged(event_cfg) => {
+                let Ok(window) = FOCUSED_WINDOW.read() else {
+                    return;
+                };
+
+                let mut exclusion_found = false;
+                for exclusion in event_cfg.exclusions.iter() {
+                    if window.match_any(exclusion) {
+                        exclusion_found = true;
+                    }
+                }
+
+                if exclusion_found {
+                    for device in self.devices.iter() {
+                        for report in event_cfg.on_no_match_reports.iter() {
+                            let _ = device.send_report(report);
+                        }
+                    }
+                    return;
+                }
+
+                let mut inclusion_found = false;
+                for inclusion in event_cfg.inclusions.iter() {
+                    if window.match_any(inclusion) {
+                        inclusion_found = true;
+                        break;
+                    }
+                }
+
+                if inclusion_found {
+                    for device in self.devices.iter() {
+                        for report in event_cfg.on_match_reports.iter() {
+                            let _ = device.send_report(report);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

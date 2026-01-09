@@ -32,6 +32,33 @@ pub struct WindowMetadata {
     pub exe: Option<PathBuf>,
 }
 
+impl WindowMetadata {
+    pub fn match_any(&self, window: &WindowMetadata) -> bool {
+        if let Some(title_self) = &self.title
+            && let Some(title_other) = &window.title
+            && title_self.contains(title_other)
+        {
+            return true;
+        }
+
+        if let Some(class_self) = &self.class
+            && let Some(class_other) = &window.class
+            && class_self.contains(class_other)
+        {
+            return true;
+        }
+
+        if let Some(exe_self) = &self.exe
+            && let Some(exe_other) = &window.exe
+            && exe_self == exe_other
+        {
+            return true;
+        }
+
+        false
+    }
+}
+
 pub struct WinHook {
     hook: HWINEVENTHOOK,
 }
