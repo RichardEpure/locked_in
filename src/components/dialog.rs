@@ -33,15 +33,15 @@ pub fn Dialog(props: DialogProps) -> Element {
                     footer {
                         button {
                             class: "secondary",
+                            onclick: move |_| props.on_cancel.call(()),
+                            "Cancel"
+                        }
+                        button {
                             onclick: move |_| {
                                 if let Some(on_ok) = props.on_ok {
                                     on_ok.call(());
                                 }
                             },
-                            "Cancel"
-                        }
-                        button {
-                            onclick: move |_| props.on_cancel.call(()),
                             "Confirm"
                         }
                     }
