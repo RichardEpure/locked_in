@@ -10,12 +10,20 @@ use dioxus::{
             Icon, TrayIconBuilder,
             menu::{Menu, MenuItem},
         },
-        use_tray_menu_event_handler,
+        use_muda_event_handler,
     },
     prelude::*,
 };
 
-use crate::components::{dialog::Dialog, edit_rule::EditRule, rules::Rules};
+use crate::components::{
+    dialog::Dialog,
+    edit_rule::EditRule,
+    events::{
+        capture_focused_window::CaptureFocusedWindow,
+        capture_focused_window_shortcut::CaptureFocusedWindowShortcut,
+    },
+    rules::Rules,
+};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -45,11 +53,23 @@ fn main() {
 #[component]
 fn App() -> Element {
     let icon = Icon::from_path("assets/favicon.ico", None).unwrap();
+
     let menu = Menu::new();
     let menu_item_quit = MenuItem::with_id("quit", "Quit", true, None);
+    let menu_item_catpure_focused_window = MenuItem::with_id(
+        "capture_focused_window",
+        "Capture Focused Window (F3)",
+        true,
+        None,
+    );
     let menu_item_toggle = MenuItem::with_id("toggle", "Toggle", true, None);
-    menu.append_items(&[&menu_item_quit, &menu_item_toggle])
-        .unwrap();
+
+    menu.append_items(&[
+        &menu_item_quit,
+        &menu_item_catpure_focused_window,
+        &menu_item_toggle,
+    ])
+    .unwrap();
 
     let builder = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
@@ -58,17 +78,32 @@ fn App() -> Element {
 
     provide_context(builder.build().expect("Failed to build tray icon"));
 
-    {
-        use_tray_menu_event_handler(move |event| match event.id.0.as_str() {
-            "quit" => {
-                std::process::exit(0);
-            }
-            "toggle" => {
-                println!("Toggle clicked");
-            }
-            _ => {}
-        });
-    }
+    let mut captured_window: Signal<Option<win::WindowMetadata>> = use_signal(|| None);
+    let mut capture_window_shortcut_armed = use_signal(|| false);
+
+    use_muda_event_handler(move |event| match event.id.0.as_str() {
+        "quit" => {
+            std::process::exit(0);
+        }
+        "capture_focused_window" => {
+            println!("Capture Focused Window");
+            capture_window_shortcut_armed.set(true);
+            spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+                interval.tick().await;
+                interval.tick().await;
+                if capture_window_shortcut_armed() {
+                    capture_window_shortcut_armed.set(false);
+                }
+            });
+        }
+        "toggle" => {
+            println!("Toggle clicked");
+        }
+        _ => {
+            println!("To menu item found");
+        }
+    });
 
     use_future(move || async move {
         let mut rx = win::FOCUSED_WINDOW_TX.subscribe();
@@ -88,7 +123,28 @@ fn App() -> Element {
         }
     });
 
-    rsx!(Main {})
+    rsx!(
+        Main {},
+        if capture_window_shortcut_armed() {
+            CaptureFocusedWindowShortcut {
+                captured_window: captured_window,
+                armed: capture_window_shortcut_armed,
+            }
+        }
+        if let Some(_) = captured_window() {
+            Dialog {
+                title: "Captured Window".to_string(),
+                hide_buttons: true,
+                on_cancel: move |_| captured_window.set(None),
+                CaptureFocusedWindow {
+                    captured_window: captured_window,
+                    on_submit: move |_| {
+                        // captured_window.set(None);
+                    }
+                }
+            }
+        }
+    )
 }
 
 #[component]
