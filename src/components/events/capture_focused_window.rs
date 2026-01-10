@@ -12,7 +12,7 @@ pub struct CaptureFocusedWindowProps {
 
 #[component]
 pub fn CaptureFocusedWindow(props: CaptureFocusedWindowProps) -> Element {
-    let mut captured_window = props.captured_window;
+    let captured_window = props.captured_window;
     let Some(window) = &*captured_window.read() else {
         panic!("Expected some captured_window value");
     };
