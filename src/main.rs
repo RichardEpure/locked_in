@@ -139,7 +139,7 @@ fn App() -> Element {
                 CaptureFocusedWindow {
                     captured_window: captured_window,
                     on_submit: move |_| {
-                        // captured_window.set(None);
+                        captured_window.set(None);
                     }
                 }
             }
