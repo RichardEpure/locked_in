@@ -12,6 +12,7 @@ fn main() {
                 "assets/styles/main.css",
                 "--style=compressed",
                 "--no-source-map",
+                "--load-path=node_modules/@picocss/pico/scss/",
             ])
             .status()
             .expect("failed to run `sass`");

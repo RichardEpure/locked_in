@@ -3,6 +3,8 @@ mod config;
 mod hid;
 mod win;
 
+use std::io::Write;
+
 use dioxus::{
     desktop::{
         Config, WindowBuilder,
@@ -34,8 +36,27 @@ static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
 
 pub static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(config::Config::load);
 
+fn install_panic_log(mut log_path: std::path::PathBuf) {
+    log_path.push("panic.log");
+
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok();
+
+        if let Some(f) = f.as_mut() {
+            let _ = writeln!(f, "PANIC: {info}\nBACKTRACE:\n{bt}\n---\n");
+        }
+    }));
+}
+
 fn main() {
     let _foreground_hook = win::start_foreground_hook();
+
+    install_panic_log(".".into());
 
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
@@ -45,14 +66,15 @@ fn main() {
                         .with_title("Locked In")
                         .with_resizable(true),
                 )
-                .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides),
+                .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides)
+                .with_data_directory("."),
         )
         .launch(App);
 }
 
 #[component]
 fn App() -> Element {
-    let icon = Icon::from_path("assets/favicon.ico", None).unwrap();
+    let icon = Icon::from_path(dioxus::asset_resolver::asset_path(FAVICON).unwrap(), None).unwrap();
 
     let menu = Menu::new();
     let menu_item_quit = MenuItem::with_id("quit", "Quit", true, None);

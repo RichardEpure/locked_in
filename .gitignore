@@ -2,4 +2,5 @@
 /target
 *.css
 *.css.map
+*.log
 config.toml

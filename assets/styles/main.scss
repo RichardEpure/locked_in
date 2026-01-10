@@ -1,6 +1,6 @@
 @use "./fonts.scss";
 
-@use "@picocss/pico/scss/pico" with (
+@use "pico" with (
     $theme-color: "amber"
 );
 

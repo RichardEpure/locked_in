@@ -9,7 +9,7 @@ title = "Locked In"
 [web.resource]
 
 # Additional CSS style files
-style = []
+style = ["assets/styles/main.css"]
 
 # Additional JavaScript files
 script = []
@@ -19,3 +19,11 @@ script = []
 # Javascript code file
 # serve: [dev-server] only
 script = []
+
+[bundle]
+identifier = "richard"
+publisher = "richard"
+icon = ["assets/favicon.ico"]
+
+[bundle.windows]
+icon_path = "assets/favicon.ico"
