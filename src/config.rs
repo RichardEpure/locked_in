@@ -95,15 +95,6 @@ impl Rule {
                     }
                 }
 
-                if exclusion_found {
-                    for device in self.devices.iter() {
-                        for report in event_cfg.on_no_match_reports.iter() {
-                            let _ = device.send_report(report);
-                        }
-                    }
-                    return;
-                }
-
                 let mut inclusion_found = false;
                 for inclusion in event_cfg.inclusions.iter() {
                     if window.match_any(inclusion) {
@@ -112,11 +103,18 @@ impl Rule {
                     }
                 }
 
-                if inclusion_found {
+                if exclusion_found || !inclusion_found {
                     for device in self.devices.iter() {
-                        for report in event_cfg.on_match_reports.iter() {
+                        for report in event_cfg.on_no_match_reports.iter() {
                             let _ = device.send_report(report);
                         }
+                    }
+                    return;
+                }
+
+                for device in self.devices.iter() {
+                    for report in event_cfg.on_match_reports.iter() {
+                        let _ = device.send_report(report);
                     }
                 }
             }
