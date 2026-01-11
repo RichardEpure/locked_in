@@ -64,7 +64,8 @@ fn main() {
                 .with_window(
                     WindowBuilder::new()
                         .with_title("Locked In")
-                        .with_resizable(true),
+                        .with_resizable(true)
+                        .with_visible(false),
                 )
                 .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides)
                 .with_data_directory("."),
