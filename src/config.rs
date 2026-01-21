@@ -154,7 +154,10 @@ impl Config {
             });
         }
 
-        let _ = fs::OpenOptions::new().create_new(true);
+        let _ = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path);
 
         Self::default()
     }
