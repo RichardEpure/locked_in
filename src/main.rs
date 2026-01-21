@@ -34,7 +34,8 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
     Signal::global(win::get_focused_window);
 
-pub static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(config::Config::load);
+pub static CONFIG_SIGNAL: GlobalSignal<config::Config> =
+    Signal::global(|| config::Config::load().expect("Failed to load config"));
 
 fn install_panic_log(mut log_path: std::path::PathBuf) {
     log_path.push("panic.log");

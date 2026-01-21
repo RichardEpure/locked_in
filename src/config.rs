@@ -123,37 +123,33 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
+    pub fn load() -> Result<Self> {
         let path = env::current_dir()
-            .unwrap_or_else(|e| panic!("Failed to get current directory: {}", e))
+            .context("Failed to get current directory")?
             .join(CONFIG_PATH);
 
         if path.is_file() {
             return Figment::new()
                 .merge(Toml::file(CONFIG_PATH))
                 .extract::<Config>()
-                .map_err(Box::new)
-                .unwrap_or_else(|e| panic!("Failed to load config.toml: {}", e));
+                .context("Failed to load config.toml");
         }
 
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to create config directory: {}. {}",
-                    parent.display(),
-                    e
-                )
-            });
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
         let _ = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path);
+            .open(&path)
+            .context("Failed to create new config file")?;
 
-        Self::default()
+        Ok(Self::default())
     }
 
     pub fn save(&self) -> Result<()> {
