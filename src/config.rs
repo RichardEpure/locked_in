@@ -187,9 +187,7 @@ impl Config {
     }
 
     pub fn delete_rule(&mut self, name: &str) {
-        if let Some(index) = self.rules.iter().position(|r| r.name == name) {
-            self.rules.remove(index);
-        }
+        self.rules.retain(|r| r.name != name);
     }
 
     pub fn get_rule_index(&self, name: &str) -> Option<usize> {
