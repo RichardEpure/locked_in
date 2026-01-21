@@ -88,20 +88,15 @@ impl Rule {
                     return;
                 };
 
-                let mut exclusion_found = false;
-                for exclusion in event_cfg.exclusions.iter() {
-                    if window.match_any(exclusion) {
-                        exclusion_found = true;
-                    }
-                }
+                let exclusion_found = event_cfg
+                    .exclusions
+                    .iter()
+                    .any(|exclusion| window.match_any(exclusion));
 
-                let mut inclusion_found = false;
-                for inclusion in event_cfg.inclusions.iter() {
-                    if window.match_any(inclusion) {
-                        inclusion_found = true;
-                        break;
-                    }
-                }
+                let inclusion_found = event_cfg
+                    .inclusions
+                    .iter()
+                    .any(|inclusion| window.match_any(inclusion));
 
                 if exclusion_found || !inclusion_found {
                     for device in self.devices.iter() {
