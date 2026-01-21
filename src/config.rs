@@ -17,6 +17,7 @@ const CONFIG_PATH: &str = "config.toml";
 #[derive(
     Debug,
     Clone,
+    Serialize,
     Deserialize,
     strum_macros::EnumIter,
     strum_macros::EnumString,
@@ -31,26 +32,6 @@ pub enum Event {
 impl Default for Event {
     fn default() -> Self {
         Self::FocusedWindowChanged(FocusedWindowChangedConfig::default())
-    }
-}
-
-impl Serialize for Event {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(None)?;
-        match self {
-            Event::FocusedWindowChanged(cfg) => {
-                map.serialize_entry("type", "focused_window_changed")?;
-                map.serialize_entry("inclusions", &cfg.inclusions)?;
-                map.serialize_entry("exclusions", &cfg.exclusions)?;
-                map.serialize_entry("on_match_reports", &cfg.on_match_reports)?;
-                map.serialize_entry("on_no_match_reports", &cfg.on_no_match_reports)?;
-            }
-        }
-        map.end()
     }
 }
 
