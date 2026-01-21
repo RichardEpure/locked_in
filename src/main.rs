@@ -141,7 +141,7 @@ fn App() -> Element {
             let config = CONFIG_SIGNAL.read();
             for rule in config.rules.iter() {
                 if let config::Event::FocusedWindowChanged(_) = rule.event {
-                    rule.trigger();
+                    rule.trigger(&focused_window);
                 }
             }
         }

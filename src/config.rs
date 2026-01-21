@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::win::{FOCUSED_WINDOW, WindowMetadata};
+use crate::win::WindowMetadata;
 
 const CONFIG_PATH: &str = "config.toml";
 
@@ -62,13 +62,9 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn trigger(&self) {
+    pub fn trigger(&self, window: &WindowMetadata) {
         match &self.event {
             Event::FocusedWindowChanged(event_cfg) => {
-                let Ok(window) = FOCUSED_WINDOW.read() else {
-                    return;
-                };
-
                 let exclusion_found = event_cfg
                     .exclusions
                     .iter()
