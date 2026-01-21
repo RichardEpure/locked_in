@@ -98,18 +98,17 @@ impl Rule {
                     .iter()
                     .any(|inclusion| window.match_any(inclusion));
 
-                if exclusion_found || !inclusion_found {
-                    for device in self.devices.iter() {
-                        for report in event_cfg.on_no_match_reports.iter() {
-                            let _ = device.send_report(report);
-                        }
-                    }
-                    return;
-                }
+                let reports = if exclusion_found || !inclusion_found {
+                    &event_cfg.on_no_match_reports
+                } else {
+                    &event_cfg.on_match_reports
+                };
 
-                for device in self.devices.iter() {
-                    for report in event_cfg.on_match_reports.iter() {
-                        let _ = device.send_report(report);
+                for device in &self.devices {
+                    for report in reports {
+                        if let Err(e) = device.send_report(report) {
+                            eprintln!("Failed to send report to device {}: {}", device.name, e);
+                        }
                     }
                 }
             }
