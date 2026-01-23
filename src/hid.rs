@@ -5,10 +5,13 @@ use std::{
 
 use super::config::Device;
 use anyhow::{Context, Result};
-use hidapi::{DeviceInfo, HidApi, HidDevice};
+use hidapi::{DeviceInfo, HidApi};
 
-pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> =
-    LazyLock::new(|| Mutex::new(HidDevices::new()));
+pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> = LazyLock::new(|| {
+    let mut devices = HidDevices::new();
+    devices.refresh();
+    Mutex::new(devices)
+});
 
 static HID_API: LazyLock<HidApi> =
     LazyLock::new(|| HidApi::new().expect("Failed to create HID API instance"));
