@@ -16,7 +16,7 @@ pub fn HidDevices(props: HidDevicesProps) -> Element {
             .lock()
             .expect("Could not fetch HID device list")
             .refresh()
-            .get_list()
+            .get_metadata_list()
     });
     let mut hid_device = use_signal(|| None::<hid::HidMetadata>);
     let mut usage_pair = use_signal(|| None::<hid::UsagePair>);
