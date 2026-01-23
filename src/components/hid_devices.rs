@@ -11,7 +11,13 @@ pub struct HidDevicesProps {
 #[component]
 pub fn HidDevices(props: HidDevicesProps) -> Element {
     let mut device = props.device;
-    let devices = use_signal(hid::get_devices);
+    let devices = use_signal(|| {
+        hid::HID_DEVICES
+            .lock()
+            .expect("Could not fetch HID device list")
+            .refresh()
+            .get_list()
+    });
     let mut hid_device = use_signal(|| None::<hid::HidMetadata>);
     let mut usage_pair = use_signal(|| None::<hid::UsagePair>);
 

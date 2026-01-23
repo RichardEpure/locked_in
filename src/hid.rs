@@ -1,8 +1,17 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{
+    collections::HashSet,
+    sync::{LazyLock, Mutex},
+};
 
 use super::config::Device;
 use anyhow::{Context, Result};
 use hidapi::{HidApi, HidDevice};
+
+pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> =
+    LazyLock::new(|| Mutex::new(HidDevices::new()));
+
+static HID_API: LazyLock<HidApi> =
+    LazyLock::new(|| HidApi::new().expect("Failed to create HID API instance"));
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct HidMetadata {
@@ -19,8 +28,58 @@ pub struct UsagePair {
     pub usage: u16,
 }
 
-static HID_API: LazyLock<HidApi> =
-    LazyLock::new(|| HidApi::new().expect("Failed to create HID API instance"));
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct HidDeviceKey {
+    pub vendor_id: u16,
+    pub product_id: u16,
+}
+
+pub struct HidDevices {
+    pub devices: std::collections::HashMap<HidDeviceKey, HidMetadata>,
+}
+
+impl HidDevices {
+    pub fn new() -> Self {
+        HidDevices {
+            devices: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn refresh(&mut self) -> &mut Self {
+        let mut devices_map: std::collections::HashMap<HidDeviceKey, HidMetadata> =
+            std::collections::HashMap::new();
+
+        for device_info in HID_API.device_list() {
+            let key = HidDeviceKey {
+                vendor_id: device_info.vendor_id(),
+                product_id: device_info.product_id(),
+            };
+
+            let entry = devices_map.entry(key).or_insert_with(|| HidMetadata {
+                vendor_id: key.vendor_id,
+                product_id: key.product_id,
+                manufacturer_string: device_info
+                    .manufacturer_string()
+                    .unwrap_or_default()
+                    .to_string(),
+                product_string: device_info.product_string().unwrap_or_default().to_string(),
+                usages: HashSet::new(),
+            });
+
+            entry.usages.insert(UsagePair {
+                usage_page: device_info.usage_page(),
+                usage: device_info.usage(),
+            });
+        }
+
+        self.devices = devices_map;
+        self
+    }
+
+    pub fn get_list(&self) -> Vec<HidMetadata> {
+        self.devices.values().cloned().collect()
+    }
+}
 
 impl Device {
     pub fn find_hid_device(&self) -> Result<HidDevice> {
@@ -64,52 +123,4 @@ impl Device {
             .write(&bytes_to_write)
             .with_context(|| "Failed to write to device")
     }
-}
-
-pub fn get_devices() -> Vec<HidMetadata> {
-    let mut devices: Vec<HidMetadata> = vec![];
-    let mut seen: HashSet<(u16, u16, String, String)> = HashSet::new();
-    for device_info in HID_API.device_list() {
-        let meta = HidMetadata {
-            vendor_id: device_info.vendor_id(),
-            product_id: device_info.product_id(),
-            manufacturer_string: device_info
-                .manufacturer_string()
-                .unwrap_or_default()
-                .to_string(),
-            product_string: device_info.product_string().unwrap_or_default().to_string(),
-            usages: HashSet::from([UsagePair {
-                usage_page: device_info.usage_page(),
-                usage: device_info.usage(),
-            }]),
-        };
-
-        let key = (
-            meta.vendor_id,
-            meta.product_id,
-            meta.manufacturer_string.clone(),
-            meta.product_string.clone(),
-        );
-
-        if seen.insert(key) {
-            devices.push(meta);
-        } else {
-            devices
-                .iter_mut()
-                .filter(|d| {
-                    d.vendor_id == meta.vendor_id
-                        && d.product_id == meta.product_id
-                        && d.manufacturer_string == meta.manufacturer_string
-                        && d.product_string == meta.product_string
-                })
-                .take(1)
-                .for_each(|d| {
-                    let _ = d.usages.insert(UsagePair {
-                        usage_page: device_info.usage_page(),
-                        usage: device_info.usage(),
-                    });
-                });
-        }
-    }
-    devices
 }
