@@ -25,6 +25,14 @@ use windows::{
     core::PWSTR,
 };
 
+pub static FOCUSED_WINDOW: LazyLock<RwLock<WindowMetadata>> =
+    LazyLock::new(|| RwLock::new(WindowMetadata::default()));
+
+pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock::new(|| {
+    let (tx, _rx) = watch::channel(WindowMetadata::default());
+    tx
+});
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WindowMetadata {
     pub title: Option<String>,
@@ -78,14 +86,6 @@ impl Drop for HandleGuard {
         }
     }
 }
-
-pub static FOCUSED_WINDOW: LazyLock<RwLock<WindowMetadata>> =
-    LazyLock::new(|| RwLock::new(WindowMetadata::default()));
-
-pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock::new(|| {
-    let (tx, _rx) = watch::channel(WindowMetadata::default());
-    tx
-});
 
 #[inline]
 fn hwnd_title(hwnd: HWND) -> Option<String> {
