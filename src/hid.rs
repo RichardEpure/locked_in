@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{LazyLock, Mutex},
 };
 
@@ -46,23 +46,21 @@ pub struct HidDeviceKey {
 }
 
 pub struct HidDevices {
-    metadata_map: std::collections::HashMap<HidMetadataKey, HidMetadata>,
-    device_info_map: std::collections::HashMap<HidDeviceKey, DeviceInfo>,
+    metadata_map: HashMap<HidMetadataKey, HidMetadata>,
+    device_info_map: HashMap<HidDeviceKey, DeviceInfo>,
 }
 
 impl HidDevices {
     pub fn new() -> Self {
         HidDevices {
-            metadata_map: std::collections::HashMap::new(),
-            device_info_map: std::collections::HashMap::new(),
+            metadata_map: HashMap::new(),
+            device_info_map: HashMap::new(),
         }
     }
 
     pub fn refresh(&mut self) -> &mut Self {
-        let mut metadata_map: std::collections::HashMap<HidMetadataKey, HidMetadata> =
-            std::collections::HashMap::new();
-        let mut device_info_map: std::collections::HashMap<HidDeviceKey, DeviceInfo> =
-            std::collections::HashMap::new();
+        let mut metadata_map: HashMap<HidMetadataKey, HidMetadata> = HashMap::new();
+        let mut device_info_map: HashMap<HidDeviceKey, DeviceInfo> = HashMap::new();
 
         for device_info in HID_API.device_list() {
             let metadata_key = HidMetadataKey {
