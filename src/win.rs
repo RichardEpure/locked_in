@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     os::windows::ffi::OsStringExt,
     path::PathBuf,
-    sync::{LazyLock, RwLock},
+    sync::{LazyLock, Mutex},
 };
 use tokio::sync::watch;
 use windows::{
@@ -25,8 +25,8 @@ use windows::{
     core::PWSTR,
 };
 
-pub static FOCUSED_WINDOW: LazyLock<RwLock<WindowMetadata>> =
-    LazyLock::new(|| RwLock::new(WindowMetadata::default()));
+pub static FOCUSED_WINDOW: LazyLock<Mutex<WindowMetadata>> =
+    LazyLock::new(|| Mutex::new(WindowMetadata::default()));
 
 pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock::new(|| {
     let (tx, _rx) = watch::channel(WindowMetadata::default());
@@ -150,22 +150,22 @@ fn process_exe(pid: u32) -> Option<PathBuf> {
 }
 
 pub fn get_focused_window() -> WindowMetadata {
-    match FOCUSED_WINDOW.read() {
+    match FOCUSED_WINDOW.lock() {
         Ok(guard) => guard.clone(),
         Err(e) => {
-            panic!("get_focused_window: failed to acquire read lock: {}", e);
+            panic!("get_focused_window: failed to acquire lock: {}", e);
         }
     }
 }
 
 pub fn set_focused_window(window: WindowMetadata) {
-    match FOCUSED_WINDOW.write() {
+    match FOCUSED_WINDOW.lock() {
         Ok(mut guard) => {
             *guard = window.clone();
             let _ = FOCUSED_WINDOW_TX.send(window);
         }
         Err(e) => {
-            println!("update_focused_window: failed to acquire write lock: {}", e);
+            eprintln!("update_focused_window: failed to acquire lock: {}", e);
         }
     }
 }
