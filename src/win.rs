@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::watch;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND},
+        Foundation::{CloseHandle, HANDLE, HWND},
         System::Threading::{
             OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
             QueryFullProcessImageNameW,
@@ -70,6 +70,15 @@ impl Drop for WinHook {
     }
 }
 
+struct HandleGuard(HANDLE);
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 pub static FOCUSED_WINDOW: LazyLock<RwLock<WindowMetadata>> =
     LazyLock::new(|| RwLock::new(WindowMetadata::default()));
 
@@ -123,6 +132,8 @@ fn process_exe(pid: u32) -> Option<PathBuf> {
         if handle.is_invalid() {
             return None;
         }
+        let _guard = HandleGuard(handle);
+
         let mut buf = vec![0u16; 1024];
         let mut size = buf.len() as u32;
         QueryFullProcessImageNameW(
@@ -132,8 +143,6 @@ fn process_exe(pid: u32) -> Option<PathBuf> {
             &mut size,
         )
         .ok()?;
-
-        let _ = CloseHandle(handle);
 
         buf.truncate(size as usize);
         Some(OsString::from_wide(&buf).into())
