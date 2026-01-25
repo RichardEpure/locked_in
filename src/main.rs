@@ -68,6 +68,7 @@ fn main() {
                         .with_resizable(true)
                         .with_visible(false),
                 )
+                .with_menu(None)
                 .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides)
                 .with_data_directory("."),
         )
