@@ -194,27 +194,24 @@ fn Main() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         main {
             class: "container",
-            h2 { "Window data: {focused_window_title} - {focused_window_class}" }
-            div {
-                button {
-                    onclick: move |_| {
-                        let mut config = CONFIG_SIGNAL.write();
-                        config.rules.push(config::Rule::default());
-                    },
-                    "Add rule"
-                }
-                button {
-                    onclick: move |_| {
-                        let _ = CONFIG_SIGNAL.read().save();
-                    },
-                    "Save Config"
-                }
-            }
+            // h2 { "Window data: {focused_window_title} - {focused_window_class}" }
+            // div {
+            //     button {
+            //         onclick: move |_| {
+            //             let mut config = CONFIG_SIGNAL.write();
+            //             config.rules.push(config::Rule::default());
+            //         },
+            //         "Add rule"
+            //     }
+            //     button {
+            //         onclick: move |_| {
+            //             let _ = CONFIG_SIGNAL.read().save();
+            //         },
+            //         "Save Config"
+            //     }
+            // }
             Rules {
-                on_edit: move |rule_name: String| {
-                    rule_to_edit.set(Some(rule_name));
-                    show_edit_rule_modal.set(true);
-                }
+                selected_rule: rule_to_edit,
             },
             if let Some(rule_to_edit) = rule_to_edit() && show_edit_rule_modal() {
                 Dialog {

@@ -1,22 +1,40 @@
 @use "./fonts.scss";
 
-@use "pico" with (
-    $theme-color: "amber"
-);
-
 // Components
 @use "./components/rules";
 
 :root {
-    --pico-font-family-sans-serif:
-        "Roboto", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-    --pico-del-color-hover: hsl(2, 46%, 70%);
+    --bg: #202020;
+    --bg-dark: #181818;
+    --bg-hover: #303030;
+    --primary: #1380ec;
+    --primary-light: #2b8cee;
+    --primary-dark: #1173d4;
+    --primary-bg: #1380ec1a;
+    --primary-bg-border: #1380ec3a;
+    --danger: #ff6666;
+    --danger-light: #ff5252;
+    --danger-dark: #ff4747;
+    --text-light-1: #f0f0f0;
+    --text-light-2: #adadad;
+    --text-dark-1: black;
+    --border: #3e3f42;
+
+    font-family:
+        "Roboto",
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+    background-color: var(--bg-dark);
 }
 
 body,
 main,
 #main {
     height: 100vh;
+    margin: 0;
     max-height: 100vh;
     overflow: hidden;
 }
@@ -26,16 +44,76 @@ main {
     flex-direction: column;
 }
 
-button.danger {
-    border-color: var(--pico-del-color);
-    background-color: var(--pico-del-color);
+h1,
+h2,
+h3 {
+    color: var(--text-light-1);
+}
 
-    &:hover {
-        background: var(--pico-del-color-hover);
+p,
+a,
+li,
+span,
+div {
+    color: var(--text-light-2);
+    font-size: 18px;
+}
+
+button {
+    background-color: var(--primary);
+    border-radius: 4px;
+    border: 1px solid var(--primary);
+    color: var(--text-dark-1);
+    font-size: 18px;
+    padding: 10px 20px;
+    cursor: pointer;
+
+    &:hover,
+    &:focus {
+        background-color: var(--primary-light);
+        border-color: var(--primary-light);
     }
 
-    &:focus-visible {
-        box-shadow: 0 0 0 var(--pico-outline-width)
-            color-mix(in srgb, var(--pico-del-color) 35%, transparent);
+    &:active {
+        background-color: var(--primary-dark);
+        border-color: var(--primary-dark);
     }
+
+    &.outline {
+        background-color: transparent;
+        color: var(--primary);
+
+        &:hover,
+        &:focus {
+            background-color: var(--primary-light);
+            color: var(--text-dark-1);
+        }
+
+        &:active {
+            background-color: var(--primary-dark);
+            color: var(--text-dark-1);
+        }
+    }
+
+    &.danger {
+        background-color: var(--danger);
+        border-color: var(--danger);
+        color: var(--text-dark-1);
+
+        &:hover,
+        &:focus {
+            background-color: var(--danger-light);
+            border-color: var(--danger-light);
+        }
+
+        &:active {
+            background-color: var(--danger-dark);
+            border-color: var(--danger-dark);
+        }
+    }
+}
+
+ul {
+    margin: 0;
+    padding: 0;
 }

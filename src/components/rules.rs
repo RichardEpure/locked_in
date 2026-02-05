@@ -4,11 +4,12 @@ use crate::CONFIG_SIGNAL;
 
 #[derive(Props, PartialEq, Clone)]
 pub struct RulesProps {
-    pub on_edit: EventHandler<String>,
+    pub selected_rule: Signal<Option<String>>,
 }
 
 #[component]
 pub fn Rules(props: RulesProps) -> Element {
+    let mut selected = props.selected_rule;
     let rule_names: Vec<String> = CONFIG_SIGNAL
         .read()
         .rules
@@ -23,30 +24,16 @@ pub fn Rules(props: RulesProps) -> Element {
                 class: "rules__title",
                 "Rules"
             }
-            div {
+            ul {
                 class: "rules__list",
                 for name in rule_names {
-                    article {
+                    li {
                         class: "rules__item",
+                        class: if selected().as_ref() == Some(&name) { "selected" } else { "" },
+                        onclick: move |_| {
+                            selected.set(Some(name.clone()));
+                        },
                         "{name}"
-                        div {
-                            role: "group",
-                            class: "buttons",
-                            button {
-                                onclick: {
-                                    let name = name.clone();
-                                    move |_| props.on_edit.call(name.clone())
-                                },
-                                "Edit"
-                            }
-                            button {
-                                class: "danger",
-                                onclick: move |_| {
-                                    CONFIG_SIGNAL.write().delete_rule(&name);
-                                },
-                                "Delete"
-                            }
-                        }
                     }
                 }
             }
