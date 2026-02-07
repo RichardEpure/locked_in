@@ -8,13 +8,13 @@ use crate::{
 };
 
 #[derive(Props, PartialEq, Clone)]
-pub struct EditRuleProps {
+pub struct RuleEditProps {
     pub rule_name: String,
     pub on_submit: EventHandler<()>,
 }
 
 #[component]
-pub fn EditRule(props: EditRuleProps) -> Element {
+pub fn RuleEdit(props: RuleEditProps) -> Element {
     let mut rule = use_signal(|| {
         if let Some(existing_rule) = CONFIG_SIGNAL.read().get_rule(&props.rule_name) {
             existing_rule.clone()
@@ -56,11 +56,12 @@ pub fn EditRule(props: EditRuleProps) -> Element {
                             }
                         }
                     },
-                    EventConfigurator {
-                        event: event_signal,
-                    }
                 },
-                hr {},
+            },
+            EventConfigurator {
+                event: event_signal,
+            }
+            fieldset {
                 label {
                     "Devices",
                     Devices {

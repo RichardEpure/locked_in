@@ -187,7 +187,7 @@ fn Main() -> Element {
 
     let mut show_edit_rule_modal = use_signal(|| false);
 
-    let mut rule_to_edit: Signal<Option<String>> = use_signal(|| None);
+    let rule_to_edit: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
@@ -211,19 +211,15 @@ fn Main() -> Element {
             //     }
             // }
             Rules {
-                selected_rule: rule_to_edit,
+                selected: rule_to_edit,
             },
-            if let Some(rule_to_edit) = rule_to_edit() && show_edit_rule_modal() {
-                Dialog {
-                    title: "Rule".to_string(),
-                    hide_buttons: true,
-                    on_cancel: move |_| show_edit_rule_modal.set(false),
-                    EditRule {
-                        rule_name: rule_to_edit,
-                        on_submit: move |_| show_edit_rule_modal.set(false),
-                    }
-                },
-            }
+            if let Some(rule_name) = rule_to_edit() {
+                RuleEdit {
+                    key: "{rule_name}",
+                    rule_name,
+                    on_submit: move |_| {},
+                }
+            },
         }
     }
 }
