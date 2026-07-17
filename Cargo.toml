@@ -6,7 +6,8 @@ edition = "2024"
 
 [dependencies]
 hidapi = "2.6.3"
-dioxus = { version = "0.7.1", features = [] }
+dioxus = { version = "0.7.3", features = [] }
+# dioxus = { path = "../dioxus/packages/dioxus", features = [] }
 figment = { version = "0.10.19", features = ["toml"] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = { version = "0.9.10", features = ["serde"] }
