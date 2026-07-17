@@ -1,8 +1,6 @@
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=assets/styles");
-
     let profile = std::env::var("PROFILE").unwrap_or_default();
 
     if profile == "release" {
