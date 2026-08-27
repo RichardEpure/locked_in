@@ -37,6 +37,7 @@ pub static CAPTURE_ARMED_SIGNAL: GlobalSignal<bool> = Signal::global(|| false);
 pub static CAPTURE_GENERATION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static CAPTURE_TARGET_SIGNAL: GlobalSignal<Option<CaptureTarget>> = Signal::global(|| None);
 pub static CONFIG_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
+pub static HID_CACHE_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 pub static UNSAVED_ENTITY_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 pub static SERVICE_READY: AtomicBool = AtomicBool::new(false);
@@ -224,6 +225,14 @@ fn App() -> Element {
                     window.set_focus();
                 }
             }
+        }
+    });
+
+    use_future(move || async move {
+        match tokio::task::spawn_blocking(hid::initialize_device_cache).await {
+            Ok(Ok(())) => *HID_CACHE_REVISION_SIGNAL.write() += 1,
+            Ok(Err(error)) => app_log::write_error(format!("HID discovery failed: {error:#}")),
+            Err(error) => app_log::write_error(format!("HID discovery task failed: {error}")),
         }
     });
 

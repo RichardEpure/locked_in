@@ -1,20 +1,33 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard},
 };
 
 use super::config::Device;
 use anyhow::{Context, Result};
 use hidapi::{DeviceInfo, HidApi};
 
-pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> = LazyLock::new(|| {
-    let mut devices = HidDevices::new();
-    devices.refresh();
-    Mutex::new(devices)
-});
+pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> =
+    LazyLock::new(|| Mutex::new(HidDevices::new()));
 
-static HID_API: LazyLock<Mutex<HidApi>> =
-    LazyLock::new(|| Mutex::new(HidApi::new().expect("Failed to create HID API instance")));
+static HID_API: LazyLock<std::result::Result<Mutex<HidApi>, hidapi::HidError>> =
+    LazyLock::new(|| HidApi::new().map(Mutex::new));
+static HID_CACHE_INITIALIZATION: LazyLock<Mutex<CacheInitialization>> =
+    LazyLock::new(|| Mutex::new(CacheInitialization::NotAttempted));
+
+enum CacheInitialization {
+    NotAttempted,
+    Ready,
+    Failed(String),
+}
+
+fn lock_hid_api() -> Result<MutexGuard<'static, HidApi>> {
+    HID_API
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("Failed to create HID API instance: {error}"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to acquire HID API lock"))
+}
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct HidMetadata {
@@ -58,15 +71,12 @@ impl HidDevices {
         }
     }
 
-    pub fn refresh(&mut self) -> &mut Self {
+    pub fn refresh(&mut self) -> Result<&mut Self> {
         let mut metadata_map: HashMap<HidMetadataKey, HidMetadata> = HashMap::new();
         let mut device_info_map: HashMap<HidDeviceKey, DeviceInfo> = HashMap::new();
-        let Ok(mut api) = HID_API.lock() else {
-            return self;
-        };
-        if api.refresh_devices().is_err() {
-            return self;
-        }
+        let mut api = lock_hid_api()?;
+        api.refresh_devices()
+            .context("Failed to refresh HID devices")?;
 
         for device_info in api.device_list() {
             let metadata_key = HidMetadataKey {
@@ -101,7 +111,7 @@ impl HidDevices {
 
         self.metadata_map = metadata_map;
         self.device_info_map = device_info_map;
-        self
+        Ok(self)
     }
 
     pub fn get_metadata_list(&self) -> Vec<HidMetadata> {
@@ -113,27 +123,79 @@ impl HidDevices {
     }
 }
 
+fn replace_device_cache() -> Result<Vec<HidMetadata>> {
+    let mut refreshed = HidDevices::new();
+    refreshed.refresh()?;
+    let metadata = refreshed.get_metadata_list();
+    *HID_DEVICES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to acquire HID device cache lock"))? = refreshed;
+    Ok(metadata)
+}
+
+fn refresh_device_cache() -> Result<Vec<HidMetadata>> {
+    let mut initialization = HID_CACHE_INITIALIZATION
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to acquire HID cache initialization lock"))?;
+    match replace_device_cache() {
+        Ok(metadata) => {
+            *initialization = CacheInitialization::Ready;
+            Ok(metadata)
+        }
+        Err(error) => {
+            let message = format!("{error:#}");
+            *initialization = CacheInitialization::Failed(message.clone());
+            Err(anyhow::anyhow!(message))
+        }
+    }
+}
+
+pub fn initialize_device_cache() -> Result<()> {
+    let mut initialization = HID_CACHE_INITIALIZATION
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to acquire HID cache initialization lock"))?;
+    match &*initialization {
+        CacheInitialization::Ready => return Ok(()),
+        CacheInitialization::Failed(message) => return Err(anyhow::anyhow!(message.clone())),
+        CacheInitialization::NotAttempted => {}
+    }
+    match replace_device_cache() {
+        Ok(_) => {
+            *initialization = CacheInitialization::Ready;
+            Ok(())
+        }
+        Err(error) => {
+            let message = format!("{error:#}");
+            *initialization = CacheInitialization::Failed(message.clone());
+            Err(anyhow::anyhow!(message))
+        }
+    }
+}
+
 impl Device {
     pub fn send_report(&self, report: &[u8]) -> Result<usize> {
-        let device_info = {
-            let hid_devices = HID_DEVICES
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Failed to acquire HID_DEVICES lock"))?;
-
-            hid_devices
-                .get(&HidDeviceKey {
-                    vendor_id: self.vid,
-                    product_id: self.pid,
-                    usage_page: self.usage_page,
-                    usage: self.usage,
-                })
-                .cloned()
-                .context("Device not found in cache")?
+        let key = HidDeviceKey {
+            vendor_id: self.vid,
+            product_id: self.pid,
+            usage_page: self.usage_page,
+            usage: self.usage,
         };
-
-        let api = HID_API
+        let mut device_info = HID_DEVICES
             .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to acquire HID API lock"))?;
+            .map_err(|_| anyhow::anyhow!("Failed to acquire HID device cache lock"))?
+            .get(&key)
+            .cloned();
+        if device_info.is_none() {
+            initialize_device_cache()?;
+            device_info = HID_DEVICES
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Failed to acquire HID device cache lock"))?
+                .get(&key)
+                .cloned();
+        }
+        let device_info = device_info.context("Device not found in cache")?;
+
+        let api = lock_hid_api()?;
         let hid_device = device_info
             .open_device(&api)
             .context("Failed to open HID device")?;
@@ -168,13 +230,8 @@ pub fn is_connected(device: &Device) -> bool {
     })
 }
 
-pub fn discovered_interfaces() -> Vec<DiscoveredInterface> {
-    let Ok(mut devices) = HID_DEVICES.lock() else {
-        return Vec::new();
-    };
-    let mut interfaces = devices
-        .refresh()
-        .get_metadata_list()
+pub fn discovered_interfaces() -> Result<Vec<DiscoveredInterface>> {
+    let mut interfaces = refresh_device_cache()?
         .into_iter()
         .flat_map(|metadata| {
             let name = if metadata.product_string.is_empty() {
@@ -206,7 +263,7 @@ pub fn discovered_interfaces() -> Vec<DiscoveredInterface> {
             .then(left.usage_page.cmp(&right.usage_page))
             .then(left.usage.cmp(&right.usage))
     });
-    interfaces
+    Ok(interfaces)
 }
 
 fn frame_report(report_id: u8, report_length: u16, report: &[u8]) -> Result<Vec<u8>> {

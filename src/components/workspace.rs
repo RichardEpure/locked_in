@@ -1,11 +1,11 @@
 use std::{collections::HashSet, process::Command};
 
-use dioxus::{desktop::use_window, prelude::*};
+use dioxus::{desktop::use_window, dioxus_core::spawn_forever, prelude::*};
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR, CONFIG_REVISION_SIGNAL,
-    CONFIG_SIGNAL, CaptureTarget, DIRTY_EDITOR_SIGNAL, SERVICE_READY, UNSAVED_ENTITY_SIGNAL,
-    app_log, arm_capture, cancel_capture,
+    CONFIG_SIGNAL, CaptureTarget, DIRTY_EDITOR_SIGNAL, HID_CACHE_REVISION_SIGNAL, SERVICE_READY,
+    UNSAVED_ENTITY_SIGNAL, app_log, arm_capture, cancel_capture,
     config::{
         self, Automation, AutomationCase, Device, LogLevel, MatchOperator, SendAction,
         TextCondition, WindowMatcher,
@@ -40,6 +40,7 @@ pub fn Workspace() -> Element {
     let selected_automation = use_signal(|| None::<String>);
     let selected_device = use_signal(|| None::<String>);
     let service_ready = SERVICE_READY.load(std::sync::atomic::Ordering::Relaxed);
+    let _hid_cache_revision = *HID_CACHE_REVISION_SIGNAL.read();
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
 
@@ -659,16 +660,94 @@ fn ActionEditor(props: ActionEditorProps) -> Element {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiscoveryStatus {
+    Idle,
+    Refreshing,
+    Ready(usize),
+    Failed(String),
+}
+
+static DISCOVERED_INTERFACES_SIGNAL: GlobalSignal<Vec<hid::DiscoveredInterface>> =
+    Signal::global(Vec::new);
+static DISCOVERY_STATUS_SIGNAL: GlobalSignal<DiscoveryStatus> =
+    Signal::global(|| DiscoveryStatus::Idle);
+
+fn apply_discovery_result(
+    discovered: &mut Vec<hid::DiscoveredInterface>,
+    result: anyhow::Result<Vec<hid::DiscoveredInterface>>,
+) -> DiscoveryStatus {
+    match result {
+        Ok(interfaces) => {
+            let count = interfaces.len();
+            *discovered = interfaces;
+            DiscoveryStatus::Ready(count)
+        }
+        Err(error) => DiscoveryStatus::Failed(format!("{error:#}")),
+    }
+}
+
+fn refresh_discovered_interfaces() {
+    if *DISCOVERY_STATUS_SIGNAL.peek() == DiscoveryStatus::Refreshing {
+        return;
+    }
+    *DISCOVERY_STATUS_SIGNAL.write() = DiscoveryStatus::Refreshing;
+    spawn_forever(async move {
+        let result = match tokio::task::spawn_blocking(hid::discovered_interfaces).await {
+            Ok(result) => result,
+            Err(error) => Err(anyhow::anyhow!("Discovery task failed: {error}")),
+        };
+        let refreshed = result.is_ok();
+        let next_status = apply_discovery_result(&mut DISCOVERED_INTERFACES_SIGNAL.write(), result);
+        *DISCOVERY_STATUS_SIGNAL.write() = next_status;
+        if refreshed {
+            *HID_CACHE_REVISION_SIGNAL.write() += 1;
+        }
+    });
+}
+
 #[component]
 fn DevicesView(props: SelectionProps) -> Element {
     let mut selected = props.selected;
     let mut query = use_signal(String::new);
-    let mut discovered = use_signal(hid::discovered_interfaces);
+    let mut discovery_open = use_signal(|| false);
+    use_effect(refresh_discovered_interfaces);
     let devices = CONFIG_SIGNAL.read().devices.clone();
-    let discovered_count = discovered().len();
+    let discovered_count = DISCOVERED_INTERFACES_SIGNAL.read().len();
     let normalized_query = query().to_lowercase();
+    let status = DISCOVERY_STATUS_SIGNAL();
+    let is_refreshing = status == DiscoveryStatus::Refreshing;
+    let (status_class, status_text) = match status {
+        DiscoveryStatus::Idle => (
+            "discovery-status",
+            "Connected interfaces have not been refreshed".to_string(),
+        ),
+        DiscoveryStatus::Refreshing => (
+            "discovery-status",
+            "Refreshing connected interfaces...".to_string(),
+        ),
+        DiscoveryStatus::Ready(count) => (
+            "discovery-status success",
+            format!("Refresh complete: {count} found"),
+        ),
+        DiscoveryStatus::Failed(error) => {
+            ("discovery-status error", format!("Refresh failed: {error}"))
+        }
+    };
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
+    use_effect(move || {
+        let selected_id = selected();
+        let is_open = discovery_open();
+        if selected_id.is_some() && !is_open {
+            spawn(async move {
+                let _ = document::eval(
+                    "requestAnimationFrame(() => document.querySelector('.entity-list__items .entity-row.selected')?.scrollIntoView({ block: 'nearest' }))",
+                )
+                .await;
+            });
+        }
+    });
     rsx! {
         aside { class: "entity-list",
             header { div { h1 { "Devices" } p { "Reusable HID destinations" } }
@@ -677,39 +756,62 @@ fn DevicesView(props: SelectionProps) -> Element {
                     let id = config.next_id("device");
                     config.devices.push(Device { id: id.clone(), name: "New device".into(), report_length: 32, ..Device::default() });
                     *CONFIG_SIGNAL.write() = config;
-                    *UNSAVED_ENTITY_SIGNAL.write() = Some(format!("device:{id}"));
+                    let token = format!("device:{id}");
+                    *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
+                    *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                     selected.set(Some(id));
                 }, "+" }
             }
             input { class: "search", placeholder: "Search devices", value: "{query}", oninput: move |event| query.set(event.value()) }
-            button { class: "discovery-refresh", onclick: move |_| discovered.set(hid::discovered_interfaces()),
-                span { "Connected interfaces" } small { "{discovered_count} found · Refresh" }
+            button {
+                class: "discovery-refresh",
+                disabled: is_refreshing,
+                aria_busy: is_refreshing,
+                onclick: move |_| refresh_discovered_interfaces(),
+                span { "Connected interfaces" }
+                small { if is_refreshing { "Refreshing..." } else { "{discovered_count} found · Refresh" } }
             }
-            if !discovered().is_empty() {
-                details { class: "discovery-list",
-                    summary { "Adopt connected interface" }
-                    for interface in discovered() {
-                        button { class: "discovery-row", disabled: navigation_locked, onclick: move |_| {
-                            let mut config = CONFIG_SIGNAL.read().clone();
-                            if let Some(existing) = config.devices.iter().find(|device|
-                                device.vid == interface.vendor_id && device.pid == interface.product_id
-                                    && device.usage_page == interface.usage_page && device.usage == interface.usage
-                            ) {
-                                selected.set(Some(existing.id.clone()));
-                            } else {
-                                let id = config.next_id(&interface.name);
-                                config.devices.push(Device {
-                                    id: id.clone(), name: interface.name.clone(), vid: interface.vendor_id,
-                                    pid: interface.product_id, usage_page: interface.usage_page,
-                                    usage: interface.usage, report_length: 32, report_id: 0,
-                                });
-                                *CONFIG_SIGNAL.write() = config;
-                                *UNSAVED_ENTITY_SIGNAL.write() = Some(format!("device:{id}"));
-                                selected.set(Some(id));
+            small { class: "{status_class}", role: "status", aria_live: "polite", "{status_text}" }
+            if !DISCOVERED_INTERFACES_SIGNAL.read().is_empty() {
+                div { class: if discovery_open() { "discovery-list expanded" } else { "discovery-list" },
+                    button {
+                        class: "discovery-list__toggle",
+                        aria_expanded: discovery_open(),
+                        aria_controls: "connected-interface-list",
+                        onclick: move |_| { let open = discovery_open(); discovery_open.set(!open); },
+                        span { class: "disclosure-icon", aria_hidden: true, if discovery_open() { "v" } else { ">" } }
+                        "Adopt connected interface"
+                    }
+                    if discovery_open() {
+                        div { class: "discovery-list__items", id: "connected-interface-list",
+                            for interface in DISCOVERED_INTERFACES_SIGNAL() {
+                                button { class: "discovery-row", disabled: navigation_locked, onclick: move |_| {
+                                    let mut config = CONFIG_SIGNAL.read().clone();
+                                    if let Some(existing) = config.devices.iter().find(|device|
+                                        device.vid == interface.vendor_id && device.pid == interface.product_id
+                                            && device.usage_page == interface.usage_page && device.usage == interface.usage
+                                    ) {
+                                        selected.set(Some(existing.id.clone()));
+                                    } else {
+                                        let id = config.next_id(&interface.name);
+                                        config.devices.push(Device {
+                                            id: id.clone(), name: interface.name.clone(), vid: interface.vendor_id,
+                                            pid: interface.product_id, usage_page: interface.usage_page,
+                                            usage: interface.usage, report_length: 32, report_id: 0,
+                                        });
+                                        *CONFIG_SIGNAL.write() = config;
+                                        let token = format!("device:{id}");
+                                        *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
+                                        *DIRTY_EDITOR_SIGNAL.write() = Some(token);
+                                        selected.set(Some(id));
+                                    }
+                                    query.set(String::new());
+                                    discovery_open.set(false);
+                                },
+                                    strong { "{interface.name}" }
+                                    small { "{interface.vendor_id:04X}:{interface.product_id:04X} · {interface.usage_page}:{interface.usage}" }
+                                }
                             }
-                        },
-                            strong { "{interface.name}" }
-                            small { "{interface.vendor_id:04X}:{interface.product_id:04X} · {interface.usage_page}:{interface.usage}" }
                         }
                     }
                 }
@@ -828,7 +930,10 @@ fn DeviceEditor(props: EntityIdProps) -> Element {
             if !references.is_empty() { section { class: "editor-card references", h3 { "Used by" } p { "{references_text}" } } }
         }
         footer { class: "save-bar",
-            if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, "{text}" } } else { span {} }
+            div { class: "save-bar__status",
+                if is_new { span { class: "message warning", role: "status", "Navigation is locked while this device is unsaved. Save or Cancel to continue." } }
+                if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, "{text}" } }
+            }
             div { class: "toolbar", button { class: "button ghost", disabled: !dirty, onclick: move |_| {
                 if UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(cancel_token.as_str()) {
                     CONFIG_SIGNAL.write().devices.retain(|device| device.id != cancel_id);
@@ -1203,4 +1308,49 @@ fn next_child_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> S
         .map(|index| format!("{prefix}-{index}"))
         .find(|candidate| !existing.contains(candidate.as_str()))
         .expect("identifier search is finite")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn discovered_interface(name: &str, usage: u16) -> hid::DiscoveredInterface {
+        hid::DiscoveredInterface {
+            name: name.into(),
+            vendor_id: 1,
+            product_id: 2,
+            usage_page: 3,
+            usage,
+        }
+    }
+
+    #[test]
+    fn successful_discovery_replaces_interfaces_even_when_count_is_unchanged() {
+        let mut discovered = vec![discovered_interface("Old", 4)];
+
+        let status = apply_discovery_result(
+            &mut discovered,
+            Ok(vec![discovered_interface("Current", 5)]),
+        );
+
+        assert_eq!(status, DiscoveryStatus::Ready(1));
+        assert_eq!(discovered, [discovered_interface("Current", 5)]);
+    }
+
+    #[test]
+    fn failed_discovery_retains_previously_displayed_interfaces() {
+        let original = discovered_interface("Current", 5);
+        let mut discovered = vec![original.clone()];
+
+        let status = apply_discovery_result(
+            &mut discovered,
+            Err(anyhow::anyhow!("enumeration unavailable")),
+        );
+
+        assert_eq!(
+            status,
+            DiscoveryStatus::Failed("enumeration unavailable".into())
+        );
+        assert_eq!(discovered, [original]);
+    }
 }
