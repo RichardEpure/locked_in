@@ -4,3 +4,4 @@
 *.css.map
 *.log
 config.toml
+/webview/
