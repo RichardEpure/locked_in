@@ -13,8 +13,8 @@ pub static HID_DEVICES: LazyLock<Mutex<HidDevices>> = LazyLock::new(|| {
     Mutex::new(devices)
 });
 
-static HID_API: LazyLock<HidApi> =
-    LazyLock::new(|| HidApi::new().expect("Failed to create HID API instance"));
+static HID_API: LazyLock<Mutex<HidApi>> =
+    LazyLock::new(|| Mutex::new(HidApi::new().expect("Failed to create HID API instance")));
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct HidMetadata {
@@ -61,8 +61,14 @@ impl HidDevices {
     pub fn refresh(&mut self) -> &mut Self {
         let mut metadata_map: HashMap<HidMetadataKey, HidMetadata> = HashMap::new();
         let mut device_info_map: HashMap<HidDeviceKey, DeviceInfo> = HashMap::new();
+        let Ok(mut api) = HID_API.lock() else {
+            return self;
+        };
+        if api.refresh_devices().is_err() {
+            return self;
+        }
 
-        for device_info in HID_API.device_list() {
+        for device_info in api.device_list() {
             let metadata_key = HidMetadataKey {
                 vendor_id: device_info.vendor_id(),
                 product_id: device_info.product_id(),
@@ -125,32 +131,111 @@ impl Device {
                 .context("Device not found in cache")?
         };
 
+        let api = HID_API
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to acquire HID API lock"))?;
         let hid_device = device_info
-            .open_device(&HID_API)
+            .open_device(&api)
             .context("Failed to open HID device")?;
 
-        let report_length = self.report_length as usize;
-
-        if report.len() > report_length {
-            anyhow::bail!(
-                "report length {} > expected {}",
-                report.len(),
-                report_length
-            )
-        }
-
-        let mut bytes_to_write = vec![
-            0u8;
-            report_length
-                .checked_add(1)
-                .context("report_length too large (overflow)")?
-        ];
-        bytes_to_write[0] = self.report_id;
-        let end = 1 + report.len();
-        bytes_to_write[1..end].copy_from_slice(report);
+        let bytes_to_write = frame_report(self.report_id, self.report_length, report)?;
 
         hid_device
             .write(&bytes_to_write)
             .with_context(|| "Failed to write to device")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredInterface {
+    pub name: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub usage_page: u16,
+    pub usage: u16,
+}
+
+pub fn is_connected(device: &Device) -> bool {
+    HID_DEVICES.lock().is_ok_and(|devices| {
+        devices
+            .get(&HidDeviceKey {
+                vendor_id: device.vid,
+                product_id: device.pid,
+                usage_page: device.usage_page,
+                usage: device.usage,
+            })
+            .is_some()
+    })
+}
+
+pub fn discovered_interfaces() -> Vec<DiscoveredInterface> {
+    let Ok(mut devices) = HID_DEVICES.lock() else {
+        return Vec::new();
+    };
+    let mut interfaces = devices
+        .refresh()
+        .get_metadata_list()
+        .into_iter()
+        .flat_map(|metadata| {
+            let name = if metadata.product_string.is_empty() {
+                if metadata.manufacturer_string.is_empty() {
+                    format!("{:04X}:{:04X}", metadata.vendor_id, metadata.product_id)
+                } else {
+                    metadata.manufacturer_string.clone()
+                }
+            } else {
+                metadata.product_string.clone()
+            };
+            metadata
+                .usages
+                .into_iter()
+                .map(move |usage| DiscoveredInterface {
+                    name: name.clone(),
+                    vendor_id: metadata.vendor_id,
+                    product_id: metadata.product_id,
+                    usage_page: usage.usage_page,
+                    usage: usage.usage,
+                })
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.vendor_id.cmp(&right.vendor_id))
+            .then(left.product_id.cmp(&right.product_id))
+            .then(left.usage_page.cmp(&right.usage_page))
+            .then(left.usage.cmp(&right.usage))
+    });
+    interfaces
+}
+
+fn frame_report(report_id: u8, report_length: u16, report: &[u8]) -> Result<Vec<u8>> {
+    let report_length = report_length as usize;
+    if report.len() > report_length {
+        anyhow::bail!(
+            "report length {} > expected {}",
+            report.len(),
+            report_length
+        )
+    }
+    let mut bytes = vec![0; report_length + 1];
+    bytes[0] = report_id;
+    bytes[1..=report.len()].copy_from_slice(report);
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_is_prefixed_and_padded() {
+        let bytes = frame_report(7, 4, &[1, 2]).unwrap();
+        assert_eq!(bytes, [7, 1, 2, 0, 0]);
+    }
+
+    #[test]
+    fn oversized_report_is_rejected() {
+        assert!(frame_report(0, 1, &[1, 2]).is_err());
     }
 }

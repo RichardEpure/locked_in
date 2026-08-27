@@ -9,20 +9,21 @@ use std::{
 use tokio::sync::watch;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HWND},
+        Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND},
         System::Threading::{
-            OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+            CreateMutexW, OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
             QueryFullProcessImageNameW,
         },
         UI::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
             WindowsAndMessaging::{
-                EVENT_SYSTEM_FOREGROUND, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
-                GetWindowThreadProcessId, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
+                EVENT_SYSTEM_FOREGROUND, FindWindowW, GetClassNameW, GetWindowTextLengthW,
+                GetWindowTextW, GetWindowThreadProcessId, OBJID_WINDOW, SW_RESTORE,
+                SetForegroundWindow, ShowWindow, WINEVENT_OUTOFCONTEXT,
             },
         },
     },
-    core::PWSTR,
+    core::{PCWSTR, PWSTR, w},
 };
 
 pub static FOCUSED_WINDOW: LazyLock<Mutex<WindowMetadata>> =
@@ -33,38 +34,11 @@ pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock
     tx
 });
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct WindowMetadata {
     pub title: Option<String>,
     pub class: Option<String>,
     pub exe: Option<PathBuf>,
-}
-
-impl WindowMetadata {
-    pub fn match_any(&self, window: &WindowMetadata) -> bool {
-        if let Some(title_self) = &self.title
-            && let Some(title_other) = &window.title
-            && title_self.contains(title_other)
-        {
-            return true;
-        }
-
-        if let Some(class_self) = &self.class
-            && let Some(class_other) = &window.class
-            && class_self.contains(class_other)
-        {
-            return true;
-        }
-
-        if let Some(exe_self) = &self.exe
-            && let Some(exe_other) = &window.exe
-            && exe_self == exe_other
-        {
-            return true;
-        }
-
-        false
-    }
 }
 
 pub struct WinHook {
@@ -190,6 +164,56 @@ pub fn start_foreground_hook() -> Result<WinHook> {
     }
 
     Ok(WinHook { hook })
+}
+
+pub struct InstanceGuard {
+    _guard: HandleGuard,
+}
+
+pub fn claim_single_instance() -> Result<Option<InstanceGuard>> {
+    let handle = unsafe { CreateMutexW(None, false, w!("Local\\LockedIn.Desktop.Instance"))? };
+    let guard = HandleGuard(handle);
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        match unsafe { FindWindowW(PCWSTR::null(), w!("Locked In")) } {
+            Ok(window) if !window.is_invalid() => unsafe {
+                let _ = ShowWindow(window, SW_RESTORE);
+                if !SetForegroundWindow(window).as_bool() {
+                    eprintln!("existing Locked In window could not be focused");
+                }
+            },
+            Ok(_) => eprintln!("existing Locked In instance has no discoverable window"),
+            Err(error) => eprintln!("existing Locked In window lookup failed: {error}"),
+        }
+        return Ok(None);
+    }
+    Ok(Some(InstanceGuard { _guard: guard }))
+}
+
+pub fn set_start_with_windows(enabled: bool) -> Result<()> {
+    let value_name = "LockedIn";
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    let status = if enabled {
+        let executable = std::env::current_exe()?;
+        std::process::Command::new("reg.exe")
+            .args(["add", key, "/v", value_name, "/t", "REG_SZ", "/d"])
+            .arg(format!("\"{}\"", executable.display()))
+            .args(["/f"])
+            .status()?
+    } else {
+        let query = std::process::Command::new("reg.exe")
+            .args(["query", key, "/v", value_name])
+            .status()?;
+        if !query.success() {
+            return Ok(());
+        }
+        std::process::Command::new("reg.exe")
+            .args(["delete", key, "/v", value_name, "/f"])
+            .status()?
+    };
+    if !status.success() {
+        anyhow::bail!("Windows startup registration failed");
+    }
+    Ok(())
 }
 
 unsafe extern "system" fn win_event_proc(
