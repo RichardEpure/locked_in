@@ -69,8 +69,7 @@ pub fn RuleEdit(props: RuleEditProps) -> Element {
                     }
                 }
             }
-            input {
-                type: "submit",
+            button {
                 onclick: move |_| {
                     let mut config = CONFIG_SIGNAL.write();
                     rule.write().event = std::mem::take(&mut *event_signal.write());

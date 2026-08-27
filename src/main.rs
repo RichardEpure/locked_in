@@ -19,11 +19,11 @@ use dioxus::{
 
 use crate::components::{
     dialog::Dialog,
-    edit_rule::EditRule,
     events::{
         capture_focused_window::CaptureFocusedWindow,
         capture_focused_window_shortcut::CaptureFocusedWindowShortcut,
     },
+    rule_edit::RuleEdit,
     rules::Rules,
 };
 
