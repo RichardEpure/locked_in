@@ -60,6 +60,7 @@ impl CaptureTarget {
 }
 
 pub fn arm_capture(target: Option<CaptureTarget>) {
+    *CAPTURED_WINDOW_SIGNAL.write() = None;
     *CAPTURE_TARGET_SIGNAL.write() = target;
     *CAPTURE_ARMED_SIGNAL.write() = true;
     *CAPTURE_GENERATION_SIGNAL.write() += 1;
@@ -67,8 +68,7 @@ pub fn arm_capture(target: Option<CaptureTarget>) {
     spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
         if *CAPTURE_GENERATION_SIGNAL.read() == generation {
-            *CAPTURE_ARMED_SIGNAL.write() = false;
-            *CAPTURE_TARGET_SIGNAL.write() = None;
+            cancel_capture();
         }
     });
 }
@@ -76,6 +76,7 @@ pub fn arm_capture(target: Option<CaptureTarget>) {
 pub fn cancel_capture() {
     *CAPTURE_ARMED_SIGNAL.write() = false;
     *CAPTURE_TARGET_SIGNAL.write() = None;
+    *CAPTURED_WINDOW_SIGNAL.write() = None;
     *CAPTURE_GENERATION_SIGNAL.write() += 1;
 }
 
@@ -285,6 +286,7 @@ fn ArmedCaptureShortcut() -> Element {
         if state != HotKeyState::Pressed {
             return;
         }
+        *CAPTURE_GENERATION_SIGNAL.write() += 1;
         *CAPTURED_WINDOW_SIGNAL.write() = Some(FOCUSED_WINDOW_SIGNAL.read().clone());
         *CAPTURE_ARMED_SIGNAL.write() = false;
         window.set_visible(true);

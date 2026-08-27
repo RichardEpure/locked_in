@@ -3,14 +3,15 @@ use std::{collections::HashSet, process::Command};
 use dioxus::{desktop::use_window, dioxus_core::spawn_forever, prelude::*};
 
 use crate::{
-    CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR, CONFIG_REVISION_SIGNAL,
-    CONFIG_SIGNAL, CaptureTarget, DIRTY_EDITOR_SIGNAL, HID_CACHE_REVISION_SIGNAL, SERVICE_READY,
-    UNSAVED_ENTITY_SIGNAL, app_log, arm_capture, cancel_capture,
+    CAPTURE_ARMED_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR,
+    CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, CaptureTarget, DIRTY_EDITOR_SIGNAL,
+    HID_CACHE_REVISION_SIGNAL, SERVICE_READY, UNSAVED_ENTITY_SIGNAL, app_log, arm_capture,
+    cancel_capture,
     config::{
         self, Automation, AutomationCase, Device, LogLevel, MatchOperator, SendAction,
         TextCondition, WindowMatcher,
     },
-    hid,
+    hid, win,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +202,7 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
         });
     let mut draft = use_signal(|| original.clone());
     let mut message = use_signal(|| None::<(bool, String)>);
+    let mut collapsed_matcher_groups = use_signal(HashSet::<(String, bool)>::new);
     let snapshot = draft();
     let editor_token = format!("automation:{id}");
     let is_new = UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(editor_token.as_str());
@@ -224,38 +226,44 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
             return;
         }
         let mut automation = draft.write();
-        let Some(case) = automation
-            .cases
-            .iter_mut()
-            .find(|case| case.id == target.case_id)
-        else {
+        let Some((case_name, case_index)) = insert_captured_matcher(
+            &mut automation,
+            &target.case_id,
+            target.exception,
+            &captured,
+        ) else {
             drop(automation);
-            *CAPTURE_TARGET_SIGNAL.write() = None;
+            cancel_capture();
+            message.set(Some((
+                false,
+                "Capture cancelled because the target case no longer exists".into(),
+            )));
             return;
         };
-        let matcher_id = next_child_id(
-            "captured",
-            case.applications
-                .iter()
-                .chain(&case.exceptions)
-                .map(|matcher| matcher.id.as_str()),
-        );
-        let list = if target.exception {
-            &mut case.exceptions
-        } else {
-            &mut case.applications
-        };
-        list.push(WindowMatcher {
-            id: matcher_id,
-            title: captured.title.map(TextCondition::contains),
-            class: captured.class.map(TextCondition::contains),
-            exe: captured
-                .exe
-                .map(|path| TextCondition::equals(path.to_string_lossy())),
-        });
         drop(automation);
-        *CAPTURE_TARGET_SIGNAL.write() = None;
-        *CAPTURED_WINDOW_SIGNAL.write() = None;
+        collapsed_matcher_groups
+            .write()
+            .remove(&(target.case_id, target.exception));
+        reveal_last_matcher(case_index, target.exception);
+        cancel_capture();
+        message.set(Some((
+            true,
+            format!(
+                "Captured window added to \"{case_name}\" -> {}",
+                matcher_group_name(target.exception)
+            ),
+        )));
+    });
+    let feedback_automation_id = id.clone();
+    use_effect(move || {
+        if *CAPTURE_ARMED_SIGNAL.read()
+            && CAPTURE_TARGET_SIGNAL
+                .read()
+                .as_ref()
+                .is_some_and(|target| target.automation_id == feedback_automation_id)
+        {
+            message.set(None);
+        }
     });
     let effect_token = editor_token.clone();
     let effect_original = original.clone();
@@ -354,7 +362,7 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     div { class: "inline-empty", "No cases yet. Add a case or use an Otherwise action." }
                 }
                 for (case_index, case) in snapshot.cases.iter().cloned().enumerate() {
-                    CaseEditor { key: "{case.id}", draft, case_index, case }
+                    CaseEditor { key: "{case.id}", draft, collapsed_matcher_groups, case_index, case }
                 }
             }
             section { class: "editor-card otherwise-card",
@@ -368,8 +376,10 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
             }
         }
         footer { class: "save-bar",
-            if has_invalid_report { span { class: "message error", "Complete or correct every hexadecimal report before saving" } }
-            else if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, "{text}" } } else { span {} }
+            div { class: "save-bar__status",
+                if has_invalid_report { span { class: "message error", role: "status", aria_live: "polite", "Complete or correct every hexadecimal report before saving" } }
+                if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, role: "status", aria_live: "polite", "{text}" } }
+            }
             div { class: "toolbar",
                 button { class: "button ghost", disabled: !dirty, onclick: move |_| {
                     if UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(cancel_token.as_str()) {
@@ -379,6 +389,7 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
                         selected.set(None);
                     } else {
                         draft.set(cancel_original.clone());
+                        message.set(None);
                     }
                 }, "Cancel" }
                 button {
@@ -415,6 +426,7 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct CaseEditorProps {
     draft: Signal<Automation>,
+    collapsed_matcher_groups: Signal<HashSet<(String, bool)>>,
     case_index: usize,
     case: AutomationCase,
 }
@@ -422,6 +434,7 @@ struct CaseEditorProps {
 #[component]
 fn CaseEditor(props: CaseEditorProps) -> Element {
     let mut draft = props.draft;
+    let collapsed_matcher_groups = props.collapsed_matcher_groups;
     let case_index = props.case_index;
     let case = props.case;
     let case_count = draft.read().cases.len();
@@ -434,12 +447,22 @@ fn CaseEditor(props: CaseEditorProps) -> Element {
                 div { class: "toolbar tight",
                     button { class: "icon-button", title: "Move up", disabled: case_index == 0, onclick: move |_| draft.write().cases.swap(case_index, case_index - 1), "↑" }
                     button { class: "icon-button", title: "Move down", disabled: case_index + 1 == case_count, onclick: move |_| draft.write().cases.swap(case_index, case_index + 1), "↓" }
-                    button { class: "icon-button danger", title: "Delete case", onclick: move |_| { draft.write().cases.remove(case_index); }, "×" }
+                    button { class: "icon-button danger", title: "Delete case", onclick: move |_| {
+                        let automation = draft.read();
+                        let deleting_capture_target = CAPTURE_TARGET_SIGNAL.read().as_ref().is_some_and(|target|
+                            target.automation_id == automation.id && target.case_id == automation.cases[case_index].id
+                        );
+                        drop(automation);
+                        if deleting_capture_target {
+                            cancel_capture();
+                        }
+                        draft.write().cases.remove(case_index);
+                    }, "×" }
                 }
             }
             div { class: "case-card__body",
-                MatcherGroup { draft, case_index, exceptions: false, matchers: case.applications.clone() }
-                MatcherGroup { draft, case_index, exceptions: true, matchers: case.exceptions.clone() }
+                MatcherGroup { draft, collapsed_matcher_groups, case_index, case_id: case.id.clone(), case_name: case.name.clone(), exceptions: false, matchers: case.applications.clone() }
+                MatcherGroup { draft, collapsed_matcher_groups, case_index, case_id: case.id.clone(), case_name: case.name.clone(), exceptions: true, matchers: case.exceptions.clone() }
                 div { class: "actions-heading", div { h4 { "Send" } p { "One report per action, routed to selected devices" } }
                     button { class: "button secondary small", onclick: move |_| add_action(&mut draft, Some(case_index)), "+ Add action" }
                 }
@@ -455,7 +478,10 @@ fn CaseEditor(props: CaseEditorProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct MatcherGroupProps {
     draft: Signal<Automation>,
+    collapsed_matcher_groups: Signal<HashSet<(String, bool)>>,
     case_index: usize,
+    case_id: String,
+    case_name: String,
     exceptions: bool,
     matchers: Vec<WindowMatcher>,
 }
@@ -463,6 +489,7 @@ struct MatcherGroupProps {
 #[component]
 fn MatcherGroup(props: MatcherGroupProps) -> Element {
     let mut draft = props.draft;
+    let mut collapsed_matcher_groups = props.collapsed_matcher_groups;
     let case_index = props.case_index;
     let exceptions = props.exceptions;
     let title = if exceptions {
@@ -475,21 +502,64 @@ fn MatcherGroup(props: MatcherGroupProps) -> Element {
     } else {
         "Any application may match; populated fields are ANDed"
     };
+    let group_key = (props.case_id.clone(), exceptions);
+    let collapsed = collapsed_matcher_groups.read().contains(&group_key);
+    let body_id = matcher_group_body_id(case_index, exceptions);
+    let capture_case_id = props.case_id.clone();
+    let add_case_id = props.case_id.clone();
+    let capture_target = CAPTURE_TARGET_SIGNAL.read().clone();
+    let capture_armed = *CAPTURE_ARMED_SIGNAL.read()
+        && capture_target.as_ref().is_some_and(|target| {
+            let automation = draft.read();
+            target.automation_id == automation.id
+                && target.case_id == props.case_id
+                && target.exception == exceptions
+        });
     rsx! {
-        div { class: if exceptions { "matcher-group exceptions" } else { "matcher-group" },
-            div { class: "matcher-group__heading", div { h4 { "{title}" } p { "{copy}" } }
+        div { class: if exceptions { if collapsed { "matcher-group exceptions collapsed" } else { "matcher-group exceptions" } } else if collapsed { "matcher-group collapsed" } else { "matcher-group" },
+            div { class: "matcher-group__heading",
+                div { class: "matcher-group__summary",
+                    button {
+                        class: "matcher-group__toggle",
+                        aria_expanded: !collapsed,
+                        aria_controls: "{body_id}",
+                        onclick: move |_| {
+                            let mut groups = collapsed_matcher_groups.write();
+                            if !groups.remove(&group_key) {
+                                groups.insert(group_key.clone());
+                            }
+                        },
+                        span { class: "disclosure-icon", aria_hidden: true, if collapsed { ">" } else { "v" } }
+                        span { "{title}" }
+                        span { class: "matcher-count", "{props.matchers.len()}" }
+                    }
+                    p { "{copy}" }
+                }
                 div { class: "toolbar tight",
                     button { class: "button ghost small", onclick: move |_| {
+                        collapsed_matcher_groups.write().remove(&(capture_case_id.clone(), exceptions));
                         let automation = draft.read();
-                        arm_capture(Some(CaptureTarget::new(automation.id.clone(), automation.cases[case_index].id.clone(), exceptions)));
-                    }, "Capture next (F3)" }
-                    button { class: "button secondary small", onclick: move |_| add_matcher(&mut draft, case_index, exceptions), "+ Add matcher" }
+                        arm_capture(Some(CaptureTarget::new(automation.id.clone(), capture_case_id.clone(), exceptions)));
+                    }, if capture_armed { "Waiting for F3" } else { "Capture next (F3)" } }
+                    button { class: "button secondary small", onclick: move |_| {
+                        collapsed_matcher_groups.write().remove(&(add_case_id.clone(), exceptions));
+                        add_matcher(&mut draft, case_index, exceptions);
+                        reveal_last_matcher(case_index, exceptions);
+                    }, "+ Add matcher" }
                 }
             }
-            for (matcher_index, matcher) in props.matchers.iter().cloned().enumerate() {
-                MatcherEditor { key: "{matcher.id}", draft, case_index, exceptions, matcher_index, matcher }
+            if capture_armed {
+                div { class: "capture-status", role: "status", aria_live: "polite",
+                    span { "Capturing for \"{props.case_name}\" -> {title}. Focus another window, then press F3." }
+                    button { class: "button ghost small", onclick: move |_| cancel_capture(), "Cancel" }
+                }
             }
-            if props.matchers.is_empty() && exceptions { div { class: "inline-empty compact", "No exceptions." } }
+            div { class: "matcher-group__body", id: "{body_id}", hidden: collapsed,
+                for (matcher_index, matcher) in props.matchers.iter().cloned().enumerate() {
+                    MatcherEditor { key: "{matcher.id}", draft, case_index, exceptions, matcher_index, matcher }
+                }
+                if props.matchers.is_empty() && exceptions { div { class: "inline-empty compact", "No exceptions." } }
+            }
         }
     }
 }
@@ -1094,7 +1164,7 @@ fn CaptureDialog() -> Element {
         div { class: "modal-backdrop",
             section { class: "capture-dialog",
                 header { div { div { class: "eyebrow", "CAPTURED WINDOW" } h2 { "Assign matcher" } p { "Review the captured metadata, then choose an automation case." } }
-                    button { class: "icon-button", aria_label: "Close", onclick: move |_| *CAPTURED_WINDOW_SIGNAL.write() = None, "×" }
+                    button { class: "icon-button", aria_label: "Close", onclick: move |_| cancel_capture(), "×" }
                 }
                 div { class: "capture-metadata",
                     div { span { "Title" } code { "{title}" } }
@@ -1114,7 +1184,7 @@ fn CaptureDialog() -> Element {
                 label { class: "exception-toggle", input { type: "checkbox", checked: exception(), onchange: move |event| exception.set(event.checked()) } "Add as an exception matcher" }
                 if !message().is_empty() { p { class: "message error", "{message}" } }
                 footer { class: "toolbar modal-actions",
-                    button { class: "button ghost", onclick: move |_| *CAPTURED_WINDOW_SIGNAL.write() = None, "Cancel" }
+                    button { class: "button ghost", onclick: move |_| cancel_capture(), "Cancel" }
                     button { class: "button primary", disabled: automation_id().is_empty() || case_id().is_empty(), onclick: move |_| {
                         let mut next = CONFIG_SIGNAL.read().clone();
                         let target_automation_id = automation_id();
@@ -1125,19 +1195,11 @@ fn CaptureDialog() -> Element {
                         let Some(automation) = next.automations.iter_mut().find(|automation| automation.id == target_automation_id) else {
                             message.set("Automation no longer exists".into()); return;
                         };
-                        let Some(case) = automation.cases.iter_mut().find(|case| case.id == case_id()) else {
+                        if insert_captured_matcher(automation, &case_id(), exception(), &captured).is_none() {
                             message.set("Case no longer exists".into()); return;
-                        };
-                        let matcher_id = next_child_id("captured", case.applications.iter().chain(&case.exceptions).map(|matcher| matcher.id.as_str()));
-                        let list = if exception() { &mut case.exceptions } else { &mut case.applications };
-                        list.push(WindowMatcher {
-                            id: matcher_id,
-                            title: captured.title.clone().map(TextCondition::contains),
-                            class: captured.class.clone().map(TextCondition::contains),
-                            exe: captured.exe.as_ref().map(|path| TextCondition::equals(path.to_string_lossy())),
-                        });
+                        }
                         match next.save() {
-                            Ok(()) => { *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; *CAPTURED_WINDOW_SIGNAL.write() = None; }
+                            Ok(()) => { *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
                             Err(error) => message.set(format!("Could not save matcher: {error}")),
                         }
                     }, "Add matcher" }
@@ -1176,6 +1238,70 @@ fn add_matcher(draft: &mut Signal<Automation>, case_index: usize, exceptions: bo
     list.push(WindowMatcher {
         id,
         ..WindowMatcher::default()
+    });
+}
+
+fn insert_captured_matcher(
+    automation: &mut Automation,
+    case_id: &str,
+    exceptions: bool,
+    captured: &win::WindowMetadata,
+) -> Option<(String, usize)> {
+    let case_index = automation
+        .cases
+        .iter()
+        .position(|case| case.id == case_id)?;
+    let case = &mut automation.cases[case_index];
+    let matcher_id = next_child_id(
+        "captured",
+        case.applications
+            .iter()
+            .chain(&case.exceptions)
+            .map(|matcher| matcher.id.as_str()),
+    );
+    let list = if exceptions {
+        &mut case.exceptions
+    } else {
+        &mut case.applications
+    };
+    list.push(WindowMatcher {
+        id: matcher_id,
+        title: captured.title.clone().map(TextCondition::contains),
+        class: captured.class.clone().map(TextCondition::contains),
+        exe: captured
+            .exe
+            .as_ref()
+            .map(|path| TextCondition::equals(path.to_string_lossy())),
+    });
+    Some((case.name.clone(), case_index))
+}
+
+fn matcher_group_name(exceptions: bool) -> &'static str {
+    if exceptions {
+        "Except when"
+    } else {
+        "Applications"
+    }
+}
+
+fn matcher_group_body_id(case_index: usize, exceptions: bool) -> String {
+    format!(
+        "matcher-list-{case_index}-{}",
+        if exceptions {
+            "exceptions"
+        } else {
+            "applications"
+        }
+    )
+}
+
+fn reveal_last_matcher(case_index: usize, exceptions: bool) {
+    let body_id = matcher_group_body_id(case_index, exceptions);
+    spawn(async move {
+        let _ = document::eval(&format!(
+            "requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById('{body_id}')?.lastElementChild?.scrollIntoView({{ block: 'nearest' }})))"
+        ))
+        .await;
     });
 }
 
@@ -1314,6 +1440,22 @@ fn next_child_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> S
 mod tests {
     use super::*;
 
+    fn automation_with_case() -> Automation {
+        Automation {
+            id: "automation-1".into(),
+            cases: vec![AutomationCase {
+                id: "case-1".into(),
+                name: "Primary".into(),
+                applications: vec![WindowMatcher {
+                    id: "captured-1".into(),
+                    ..WindowMatcher::default()
+                }],
+                ..AutomationCase::default()
+            }],
+            ..Automation::default()
+        }
+    }
+
     fn discovered_interface(name: &str, usage: u16) -> hid::DiscoveredInterface {
         hid::DiscoveredInterface {
             name: name.into(),
@@ -1352,5 +1494,44 @@ mod tests {
             DiscoveryStatus::Failed("enumeration unavailable".into())
         );
         assert_eq!(discovered, [original]);
+    }
+
+    #[test]
+    fn captured_matcher_routes_metadata_to_the_selected_group() {
+        let mut automation = automation_with_case();
+        let captured = win::WindowMetadata {
+            title: Some("Editor".into()),
+            class: Some("WindowClass".into()),
+            exe: Some(std::path::PathBuf::from(r"C:\Apps\editor.exe")),
+        };
+
+        let case_name = insert_captured_matcher(&mut automation, "case-1", true, &captured);
+
+        assert_eq!(case_name, Some(("Primary".into(), 0)));
+        assert_eq!(automation.cases[0].applications.len(), 1);
+        let matcher = &automation.cases[0].exceptions[0];
+        assert_eq!(matcher.id, "captured-2");
+        assert_eq!(matcher.title, Some(TextCondition::contains("Editor")));
+        assert_eq!(matcher.class, Some(TextCondition::contains("WindowClass")));
+        assert_eq!(
+            matcher.exe,
+            Some(TextCondition::equals(r"C:\Apps\editor.exe"))
+        );
+    }
+
+    #[test]
+    fn captured_matcher_leaves_automation_unchanged_when_case_is_missing() {
+        let mut automation = automation_with_case();
+        let original = automation.clone();
+
+        let result = insert_captured_matcher(
+            &mut automation,
+            "missing-case",
+            false,
+            &win::WindowMetadata::default(),
+        );
+
+        assert_eq!(result, None);
+        assert_eq!(automation, original);
     }
 }
