@@ -2,7 +2,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use tokio::sync::{mpsc, watch};
 
-use super::{AutomationRuntime, RuntimeCommand, TestDispatchResult};
+use super::{
+    AutomationRuntime, RuntimeCommand, RuntimeLifecycle, RuntimeRequestError, TestDispatchResult,
+};
 use crate::{
     app_log,
     config::{Device, SendAction},
@@ -13,7 +15,8 @@ use crate::{
 pub(super) fn run(
     runtime: AutomationRuntime,
     focus_events: watch::Receiver<WindowMetadata>,
-    commands: mpsc::UnboundedReceiver<RuntimeCommand>,
+    commands: mpsc::Receiver<RuntimeCommand>,
+    shutdown: watch::Receiver<bool>,
     backend: Box<dyn HidBackend>,
 ) {
     let panic_runtime = runtime.clone();
@@ -21,7 +24,7 @@ pub(super) fn run(
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .map_err(|error| format!("automation executor could not start: {error}"))?;
-        tokio_runtime.block_on(run_loop(runtime, focus_events, commands, backend));
+        tokio_runtime.block_on(run_loop(runtime, focus_events, commands, shutdown, backend));
         Ok::<(), String>(())
     }));
     match outcome {
@@ -31,8 +34,11 @@ pub(super) fn run(
             panic_runtime.close_admission();
             panic_runtime.update_health(|health| {
                 health.worker_error = Some(error);
-                health.started = true;
-                health.stopping = false;
+                health.lifecycle = match health.lifecycle {
+                    RuntimeLifecycle::Starting => RuntimeLifecycle::Running,
+                    RuntimeLifecycle::Stopping => RuntimeLifecycle::Stopped,
+                    lifecycle => lifecycle,
+                };
             });
         }
         Err(_) => {
@@ -40,8 +46,11 @@ pub(super) fn run(
             panic_runtime.close_admission();
             panic_runtime.update_health(|health| {
                 health.worker_error = Some("automation runtime panicked".to_string());
-                health.started = true;
-                health.stopping = false;
+                health.lifecycle = match health.lifecycle {
+                    RuntimeLifecycle::Starting => RuntimeLifecycle::Running,
+                    RuntimeLifecycle::Stopping => RuntimeLifecycle::Stopped,
+                    lifecycle => lifecycle,
+                };
             });
         }
     }
@@ -50,7 +59,8 @@ pub(super) fn run(
 async fn run_loop(
     runtime: AutomationRuntime,
     mut focus_events: watch::Receiver<WindowMetadata>,
-    mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
+    mut commands: mpsc::Receiver<RuntimeCommand>,
+    mut shutdown: watch::Receiver<bool>,
     mut backend: Box<dyn HidBackend>,
 ) {
     refresh_hid(&runtime, backend.as_mut(), true);
@@ -59,16 +69,20 @@ async fn run_loop(
     loop {
         tokio::select! {
             biased;
+            changed = shutdown.changed() => {
+                debug_assert!(changed.is_ok() && *shutdown.borrow_and_update());
+                break;
+            }
             command = commands.recv() => {
                 match command {
                     Some(RuntimeCommand::TestAction { action, devices, response }) => {
                         let result = dispatch_test(&runtime, backend.as_mut(), &action, &devices);
-                        let _ = response.send(result);
+                        let _ = response.send(Ok(result));
                     }
                     Some(RuntimeCommand::RefreshHid) => {
                         refresh_hid(&runtime, backend.as_mut(), false);
                     }
-                    Some(RuntimeCommand::Shutdown) | None => break,
+                    None => break,
                 }
             }
             changed = focus_events.changed(), if focus_open => {
@@ -85,10 +99,19 @@ async fn run_loop(
         }
     }
 
+    cancel_queued_commands(&mut commands);
     runtime.update_health(|health| {
-        health.stopping = false;
-        health.stopped = true;
+        health.lifecycle = RuntimeLifecycle::Stopped;
     });
+}
+
+fn cancel_queued_commands(commands: &mut mpsc::Receiver<RuntimeCommand>) {
+    commands.close();
+    while let Ok(command) = commands.try_recv() {
+        if let RuntimeCommand::TestAction { response, .. } = command {
+            let _ = response.send(Err(RuntimeRequestError::Cancelled));
+        }
+    }
 }
 
 fn refresh_hid(runtime: &AutomationRuntime, backend: &mut dyn HidBackend, startup: bool) {
@@ -100,7 +123,11 @@ fn refresh_hid(runtime: &AutomationRuntime, backend: &mut dyn HidBackend, startu
     runtime.publish_completed_hid_refresh(inventory.clone());
     update_refresh_health(runtime, &inventory);
     if startup {
-        runtime.update_health(|health| health.started = true);
+        runtime.update_health(|health| {
+            if health.lifecycle == RuntimeLifecycle::Starting {
+                health.lifecycle = RuntimeLifecycle::Running;
+            }
+        });
     }
 }
 

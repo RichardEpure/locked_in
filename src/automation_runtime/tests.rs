@@ -7,8 +7,8 @@ use std::{
 };
 
 use super::{
-    AutomationRuntime, FocusSourceState, HidRefreshRequestResult, RuntimeOwner, RuntimePhase,
-    TestDispatchResult,
+    AutomationRuntime, FocusSourceState, HidRefreshRequestResult, ORDINARY_COMMAND_CAPACITY,
+    RuntimeOwner, RuntimePhase, RuntimeRequestError, TestDispatchResult,
 };
 use crate::{
     config::{
@@ -398,7 +398,7 @@ fn refresh_requests_coalesce_until_completion_then_allow_another_request() {
 }
 
 #[test]
-fn admitted_test_refresh_test_and_shutdown_execute_fifo_without_interleaving() {
+fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(WindowMetadata::default());
     let (mut backend, events) = backend([ready(1), ready(2)]);
     let (send_started_tx, send_started) = mpsc::channel();
@@ -434,16 +434,6 @@ fn admitted_test_refresh_test_and_shutdown_execute_fifo_without_interleaving() {
                 .unwrap()
         });
         tokio::task::yield_now().await;
-        runtime.request_shutdown();
-        runtime.request_shutdown();
-        assert!(runtime.request_hid_refresh().is_err());
-        assert!(
-            runtime
-                .test_action(action(3), vec![device("late")])
-                .await
-                .is_err()
-        );
-
         send_release_tx.send(()).unwrap();
         assert_eq!(
             events.recv().unwrap(),
@@ -457,11 +447,109 @@ fn admitted_test_refresh_test_and_shutdown_execute_fifo_without_interleaving() {
         );
         assert_eq!(first.await.unwrap().sent, 2);
         assert_eq!(second.await.unwrap().sent, 1);
+
+        runtime.request_shutdown();
+        runtime.request_shutdown();
+        assert_eq!(
+            runtime.request_hid_refresh(),
+            Err(RuntimeRequestError::Unavailable)
+        );
+        assert_eq!(
+            runtime.test_action(action(3), vec![device("late")]).await,
+            Err(RuntimeRequestError::Unavailable)
+        );
     });
 
     owner.shutdown_and_join(Duration::from_secs(1));
     assert_eq!(runtime.status().phase, RuntimePhase::Stopped);
     assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn saturated_queue_rejects_ordinary_work_but_shutdown_cancels_every_queued_test() {
+    let (_focus_tx, focus_rx) = tokio::sync::watch::channel(WindowMetadata::default());
+    let (mut backend, events) = backend([ready(1)]);
+    let (send_started_tx, send_started) = mpsc::channel();
+    let (send_release_tx, send_release) = mpsc::channel();
+    backend.first_send_gate = Some((send_started_tx, send_release));
+    let (runtime, owner) = start(Some(config(1, &["running"])), focus_rx, backend);
+    finish_startup(&runtime, &events, 1);
+
+    let running = runtime
+        .admit_test_action(action(1), vec![device("running")])
+        .unwrap();
+    send_started.recv().unwrap();
+    assert_eq!(
+        events.recv().unwrap(),
+        BackendEvent::Send("running".to_string(), vec![1])
+    );
+
+    let queued = (0..ORDINARY_COMMAND_CAPACITY)
+        .map(|index| {
+            runtime
+                .admit_test_action(action(2), vec![device(&format!("queued-{index}"))])
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        block_on(runtime.test_action(action(3), vec![device("full")])),
+        Err(RuntimeRequestError::Busy)
+    );
+    assert_eq!(
+        runtime.request_hid_refresh(),
+        Err(RuntimeRequestError::Busy)
+    );
+
+    runtime.request_shutdown();
+    runtime.request_shutdown();
+    assert_eq!(runtime.status().phase, RuntimePhase::Stopping);
+    send_release_tx.send(()).unwrap();
+
+    assert_eq!(block_on(running).unwrap().unwrap().sent, 1);
+    for response in queued {
+        assert_eq!(
+            block_on(response).unwrap(),
+            Err(RuntimeRequestError::Cancelled)
+        );
+    }
+    owner.shutdown_and_join(Duration::from_secs(1));
+
+    assert_eq!(runtime.status().phase, RuntimePhase::Stopped);
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn status_publication_does_not_regress_after_shutdown_starts() {
+    let (_focus_tx, focus_rx) = tokio::sync::watch::channel(WindowMetadata::default());
+    let (mut backend, events) = backend([ready(1)]);
+    let (send_started_tx, send_started) = mpsc::channel();
+    let (send_release_tx, send_release) = mpsc::channel();
+    backend.first_send_gate = Some((send_started_tx, send_release));
+    let (runtime, owner) = start(Some(config(1, &["running"])), focus_rx, backend);
+    finish_startup(&runtime, &events, 1);
+
+    let running = runtime
+        .admit_test_action(action(1), vec![device("running")])
+        .unwrap();
+    send_started.recv().unwrap();
+    assert!(matches!(events.recv().unwrap(), BackendEvent::Send(..)));
+    runtime.request_shutdown();
+    assert_eq!(runtime.status().phase, RuntimePhase::Stopping);
+
+    send_release_tx.send(()).unwrap();
+    assert_eq!(block_on(running).unwrap().unwrap().sent, 1);
+    owner.shutdown_and_join(Duration::from_secs(1));
+
+    let history = runtime.status_history();
+    let stopping = history
+        .iter()
+        .position(|status| status.phase == RuntimePhase::Stopping)
+        .unwrap();
+    assert!(
+        history[stopping..]
+            .iter()
+            .all(|status| matches!(status.phase, RuntimePhase::Stopping | RuntimePhase::Stopped))
+    );
 }
 
 #[test]

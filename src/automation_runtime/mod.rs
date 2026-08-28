@@ -53,33 +53,40 @@ pub(crate) struct TestDispatchResult {
     pub failures: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeLifecycle {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+}
+
 struct RuntimeHealth {
     focus_error: Option<String>,
     refresh_error: Option<String>,
     dispatch_error: Option<String>,
     worker_error: Option<String>,
     has_config: bool,
-    started: bool,
-    stopping: bool,
-    stopped: bool,
+    lifecycle: RuntimeLifecycle,
 }
 
 impl RuntimeHealth {
     fn status(&self) -> RuntimeStatus {
-        if self.stopped {
-            return RuntimeStatus {
-                phase: RuntimePhase::Stopped,
-                detail: None,
-            };
-        }
-        if self.stopping {
-            return RuntimeStatus {
-                phase: RuntimePhase::Stopping,
-                detail: None,
-            };
-        }
-        if !self.started {
-            return RuntimeStatus::starting();
+        match self.lifecycle {
+            RuntimeLifecycle::Starting => return RuntimeStatus::starting(),
+            RuntimeLifecycle::Stopping => {
+                return RuntimeStatus {
+                    phase: RuntimePhase::Stopping,
+                    detail: None,
+                };
+            }
+            RuntimeLifecycle::Stopped => {
+                return RuntimeStatus {
+                    phase: RuntimePhase::Stopped,
+                    detail: None,
+                };
+            }
+            RuntimeLifecycle::Running => {}
         }
 
         let mut unavailable = Vec::new();
@@ -126,8 +133,11 @@ struct Shared {
     config: RwLock<Option<Arc<Config>>>,
     health: Mutex<RuntimeHealth>,
     status: watch::Sender<RuntimeStatus>,
+    #[cfg(test)]
+    status_history: Mutex<Vec<RuntimeStatus>>,
     hid_inventory: watch::Sender<Arc<HidInventory>>,
-    commands: mpsc::UnboundedSender<RuntimeCommand>,
+    commands: mpsc::Sender<RuntimeCommand>,
+    shutdown: watch::Sender<bool>,
     admission: Mutex<Admission>,
 }
 
@@ -135,11 +145,12 @@ enum RuntimeCommand {
     TestAction {
         action: SendAction,
         devices: Vec<Device>,
-        response: oneshot::Sender<TestDispatchResult>,
+        response: oneshot::Sender<std::result::Result<TestDispatchResult, RuntimeRequestError>>,
     },
     RefreshHid,
-    Shutdown,
 }
+
+const ORDINARY_COMMAND_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HidRefreshRequestResult {
@@ -148,15 +159,23 @@ pub(crate) enum HidRefreshRequestResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeUnavailable;
+pub(crate) enum RuntimeRequestError {
+    Busy,
+    Unavailable,
+    Cancelled,
+}
 
-impl Display for RuntimeUnavailable {
+impl Display for RuntimeRequestError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.write_str("automation runtime is stopping or unavailable")
+        formatter.write_str(match self {
+            Self::Busy => "automation runtime command queue is full",
+            Self::Unavailable => "automation runtime is stopping or unavailable",
+            Self::Cancelled => "automation runtime cancelled the command before execution",
+        })
     }
 }
 
-impl Error for RuntimeUnavailable {}
+impl Error for RuntimeRequestError {}
 
 #[derive(Clone)]
 pub(crate) struct AutomationRuntime {
@@ -170,7 +189,8 @@ impl AutomationRuntime {
         focus_source: FocusSourceState,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
-        let (commands, command_rx) = mpsc::unbounded_channel();
+        let (commands, command_rx) = mpsc::channel(ORDINARY_COMMAND_CAPACITY);
+        let (shutdown, shutdown_rx) = watch::channel(false);
         let (status, _) = watch::channel(RuntimeStatus::starting());
         let (hid_inventory, _) = watch::channel(Arc::new(HidInventory::default()));
         let (completed, completion_rx) = std::sync::mpsc::channel();
@@ -187,13 +207,14 @@ impl AutomationRuntime {
                 dispatch_error: None,
                 worker_error: None,
                 has_config,
-                started: false,
-                stopping: false,
-                stopped: false,
+                lifecycle: RuntimeLifecycle::Starting,
             }),
             status,
+            #[cfg(test)]
+            status_history: Mutex::new(vec![RuntimeStatus::starting()]),
             hid_inventory,
             commands,
+            shutdown,
             admission: Mutex::new(Admission {
                 refresh_pending: true,
                 shutdown_requested: false,
@@ -204,7 +225,13 @@ impl AutomationRuntime {
         let worker = std::thread::Builder::new()
             .name("locked-in-automation".to_string())
             .spawn(move || {
-                worker::run(worker_runtime, focus_events, command_rx, Box::new(backend));
+                worker::run(
+                    worker_runtime,
+                    focus_events,
+                    command_rx,
+                    shutdown_rx,
+                    Box::new(backend),
+                );
                 let _ = completed.send(());
             })?;
         let owner = RuntimeOwner {
@@ -246,7 +273,21 @@ impl AutomationRuntime {
         &self,
         action: SendAction,
         devices: Vec<Device>,
-    ) -> Result<TestDispatchResult> {
+    ) -> std::result::Result<TestDispatchResult, RuntimeRequestError> {
+        let receiver = self.admit_test_action(action, devices)?;
+        receiver
+            .await
+            .unwrap_or(Err(RuntimeRequestError::Cancelled))
+    }
+
+    fn admit_test_action(
+        &self,
+        action: SendAction,
+        devices: Vec<Device>,
+    ) -> std::result::Result<
+        oneshot::Receiver<std::result::Result<TestDispatchResult, RuntimeRequestError>>,
+        RuntimeRequestError,
+    > {
         let (response, receiver) = oneshot::channel();
         {
             let admission = self
@@ -255,46 +296,48 @@ impl AutomationRuntime {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if admission.shutdown_requested {
-                return Err(RuntimeUnavailable.into());
+                return Err(RuntimeRequestError::Unavailable);
             }
-            self.shared
-                .commands
-                .send(RuntimeCommand::TestAction {
-                    action,
-                    devices,
-                    response,
-                })
-                .map_err(|_| RuntimeUnavailable)?;
+            match self.shared.commands.try_send(RuntimeCommand::TestAction {
+                action,
+                devices,
+                response,
+            }) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    return Err(RuntimeRequestError::Busy);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(RuntimeRequestError::Unavailable);
+                }
+            }
         }
-        receiver
-            .await
-            .map_err(|_| anyhow::anyhow!("automation runtime stopped before the test completed"))
+        Ok(receiver)
     }
 
     pub fn request_hid_refresh(
         &self,
-    ) -> std::result::Result<HidRefreshRequestResult, RuntimeUnavailable> {
+    ) -> std::result::Result<HidRefreshRequestResult, RuntimeRequestError> {
         let mut admission = self
             .shared
             .admission
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if admission.shutdown_requested {
-            return Err(RuntimeUnavailable);
+            return Err(RuntimeRequestError::Unavailable);
         }
         if admission.refresh_pending {
             return Ok(HidRefreshRequestResult::AlreadyPending);
         }
 
-        admission.refresh_pending = true;
-        if self
-            .shared
-            .commands
-            .send(RuntimeCommand::RefreshHid)
-            .is_err()
-        {
-            admission.refresh_pending = false;
-            return Err(RuntimeUnavailable);
+        match self.shared.commands.try_send(RuntimeCommand::RefreshHid) {
+            Ok(()) => admission.refresh_pending = true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                return Err(RuntimeRequestError::Busy);
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(RuntimeRequestError::Unavailable);
+            }
         }
         Ok(HidRefreshRequestResult::Queued)
     }
@@ -309,8 +352,12 @@ impl AutomationRuntime {
             return;
         }
         admission.shutdown_requested = true;
-        self.update_health(|health| health.stopping = true);
-        let _ = self.shared.commands.send(RuntimeCommand::Shutdown);
+        self.update_health(|health| {
+            if health.lifecycle != RuntimeLifecycle::Stopped {
+                health.lifecycle = RuntimeLifecycle::Stopping;
+            }
+        });
+        self.shared.shutdown.send_replace(true);
     }
 
     fn config_snapshot(&self) -> Option<Arc<Config>> {
@@ -322,16 +369,20 @@ impl AutomationRuntime {
     }
 
     fn update_health(&self, update: impl FnOnce(&mut RuntimeHealth)) {
-        let status = {
-            let mut health = self
-                .shared
-                .health
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            update(&mut health);
-            health.status()
-        };
-        self.shared.status.send_replace(status);
+        let mut health = self
+            .shared
+            .health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        update(&mut health);
+        let status = health.status();
+        self.shared.status.send_replace(status.clone());
+        #[cfg(test)]
+        self.shared
+            .status_history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(status);
     }
 
     fn publish_hid_inventory(&self, inventory: HidInventory) {
@@ -364,6 +415,15 @@ impl AutomationRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         admission.refresh_pending = false;
         admission.shutdown_requested = true;
+    }
+
+    #[cfg(test)]
+    fn status_history(&self) -> Vec<RuntimeStatus> {
+        self.shared
+            .status_history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 
