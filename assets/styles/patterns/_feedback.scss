@@ -1,0 +1,50 @@
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    background: #596471;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px rgb(89 100 113 / 12%);
+
+    &.online {
+        background: var(--success);
+        box-shadow: 0 0 0 3px rgb(85 214 158 / 12%);
+    }
+
+    &.error {
+        background: var(--danger);
+        box-shadow: 0 0 0 3px rgb(255 114 127 / 12%);
+    }
+}
+
+.inline-empty {
+    padding: 18px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    background: rgb(0 0 0 / 10%);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+
+    &.compact {
+        padding: 10px;
+    }
+}
+
+.message {
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+
+    &.success {
+        color: var(--success);
+    }
+
+    &.error {
+        color: var(--danger);
+    }
+
+    &.warning {
+        color: var(--warning);
+    }
+}

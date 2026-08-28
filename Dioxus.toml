@@ -8,9 +8,6 @@ title = "Locked In"
 # include `assets` in web platform
 [web.resource]
 
-# Additional CSS style files
-style = ["assets/styles/main.css"]
-
 # Additional JavaScript files
 script = []
 
@@ -21,7 +18,7 @@ script = []
 script = []
 
 [bundle]
-identifier = "richard"
+identifier = "com.richardepure.lockedin"
 publisher = "richard"
 icon = ["assets/favicon.ico"]
 

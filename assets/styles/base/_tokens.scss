@@ -1,0 +1,26 @@
+:root {
+    color-scheme: dark;
+    --canvas: #0e1116;
+    --nav: #11151b;
+    --sidebar: #171c23;
+    --surface: #1b212a;
+    --surface-raised: #222a35;
+    --surface-hover: #293341;
+    --border: #303a47;
+    --border-strong: #435064;
+    --text: #f4f7fb;
+    --text-muted: #98a5b5;
+    --text-faint: #6f7c8c;
+    --accent: #61a8ff;
+    --accent-strong: #2f8cff;
+    --accent-soft: rgb(47 140 255 / 13%);
+    --success: #55d69e;
+    --danger: #ff727f;
+    --danger-soft: rgb(255 114 127 / 12%);
+    --warning: #ffc866;
+    --radius: 8px;
+    --shadow: 0 18px 48px rgb(0 0 0 / 22%);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-size: 15px;
+    background: var(--canvas);
+}

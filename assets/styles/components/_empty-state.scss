@@ -1,0 +1,26 @@
+.empty-state {
+    display: grid;
+    width: min(460px, 70%);
+    margin: auto;
+    place-items: center;
+    text-align: center;
+
+    &__glyph {
+        display: grid;
+        width: 58px;
+        height: 58px;
+        margin-bottom: 18px;
+        place-items: center;
+        color: var(--accent);
+        font-size: 1.5rem;
+        background: var(--accent-soft);
+        border: 1px solid rgb(97 168 255 / 24%);
+        border-radius: 16px 16px 16px 4px;
+    }
+
+    p {
+        max-width: 420px;
+        margin-top: 8px;
+        line-height: 1.55;
+    }
+}

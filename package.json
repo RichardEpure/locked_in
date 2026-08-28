@@ -4,8 +4,12 @@
     "description": "",
     "main": "index.js",
     "scripts": {
-        "css:build": "sass --load-path=node_modules/@picocss/pico/scss/ assets/styles/main.scss assets/styles/main.css",
-        "css:watch": "sass --load-path=node_modules/@picocss/pico/scss/ assets/styles/main.scss assets/styles/main.css --watch"
+        "dev": "npm run css:build && concurrently --kill-others \"npm:css:watch\" \"dx serve --desktop\"",
+        "css:build": "sass --style=expanded --no-source-map assets/styles/main.scss assets/styles/main.css",
+        "css:build:release": "sass --style=compressed --no-source-map assets/styles/main.scss assets/styles/main.css",
+        "css:watch": "sass --no-source-map --watch assets/styles/main.scss assets/styles/main.css",
+        "bundle": "npm run css:build:release && dx bundle --desktop --release --locked",
+        "test": "npm run css:build && cargo test --locked"
     },
     "repository": {
         "type": "git",
@@ -18,10 +22,8 @@
         "url": "https://github.com/RichardEpure/locked_in/issues"
     },
     "homepage": "https://github.com/RichardEpure/locked_in#readme",
-    "dependencies": {
-        "@picocss/pico": "^2.1.1"
-    },
     "devDependencies": {
-        "sass": "^1.97.1"
+        "concurrently": "9.2.4",
+        "sass": "1.97.1"
     }
 }

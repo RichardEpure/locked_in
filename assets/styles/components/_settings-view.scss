@@ -1,0 +1,36 @@
+.setting-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 18px;
+    align-items: center;
+    padding: 13px 4px;
+    border-bottom: 1px solid var(--border);
+
+    &:last-child {
+        border-bottom: 0;
+    }
+
+    & > div {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    strong {
+        font-size: 0.9rem;
+    }
+
+    small {
+        font-size: 0.85rem;
+        font-weight: 400;
+    }
+}
+
+.settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    &.align-end {
+        align-items: end;
+    }
+}

@@ -1,0 +1,30 @@
+.condition-row {
+    display: grid;
+    grid-template-columns: 92px 108px minmax(120px, 1fr) 48px;
+    gap: 8px;
+    align-items: center;
+
+    input,
+    select {
+        min-height: 34px;
+    }
+
+    input[type="checkbox"] {
+        height: 16px;
+        min-height: 16px;
+    }
+}
+
+.condition-label {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.case-check {
+    display: flex;
+    flex-direction: row;
+    gap: 5px;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+}

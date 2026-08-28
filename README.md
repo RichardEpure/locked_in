@@ -28,7 +28,7 @@ id = "my-device"
 name = "My Device"
 vid = 45752
 pid = 0
-usage_page = 66012
+usage_page = 65376
 usage = 80
 report_length = 32
 report_id = 0
@@ -75,12 +75,16 @@ Release builds store `config.toml`, logs, panic logs, and WebView data under
 `LOCKED_IN_DATA_DIR` to use an isolated data directory for development or automation.
 
 # Setup
-- This project uses [Dioxus](https://dioxuslabs.com/), make sure you go through the [setup here](https://dioxuslabs.com/learn/0.7/getting_started/).
-- Clone this repo
-- `npm install`
-- `cargo install`
+- Install Rust and the platform dependencies from the [Dioxus setup guide](https://dioxuslabs.com/learn/0.7/getting_started/).
+- Install the pinned Dioxus CLI: `cargo install dioxus-cli --version 0.7.10 --locked`.
+- Clone this repository.
+- Install the locked Node dependencies: `npm ci`.
+
 ## Build
-- `dx bundle`
+Run `npm run bundle` to generate compressed CSS and create a locked release desktop bundle.
+
 ## Develop
-- `npm run css:watch`
-- `dx serve`
+Run `npm run dev` to generate development CSS, watch Sass imports, and serve the desktop app.
+
+## Test
+Run `npm test` to generate development CSS and run the locked Rust test suite.

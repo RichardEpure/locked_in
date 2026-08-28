@@ -1,0 +1,61 @@
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#main {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+body {
+    color: var(--text);
+    background:
+        radial-gradient(circle at 75% -20%, rgb(52 112 184 / 10%), transparent 35%),
+        var(--canvas);
+}
+
+button,
+input,
+select {
+    font: inherit;
+}
+
+button {
+    color: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+    margin: 0;
+}
+
+h1 {
+    font-size: 1.3rem;
+    line-height: 1.25;
+}
+
+h2 {
+    font-size: 1.75rem;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+}
+
+h3 {
+    font-size: 1rem;
+}
+
+h4 {
+    font-size: 0.93rem;
+}
+
+p,
+small {
+    color: var(--text-muted);
+}
