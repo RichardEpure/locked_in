@@ -1,6 +1,8 @@
 // Runtime publication will consume this module after the coordinator cutover.
 #[allow(dead_code)]
 mod active;
+#[allow(dead_code)]
+mod coordinator;
 mod encoding;
 mod evaluation;
 mod model;
@@ -14,6 +16,11 @@ use anyhow::{Result, anyhow};
 
 #[allow(unused_imports)]
 pub use active::{ActiveConfig, ActiveDispatch};
+#[allow(unused_imports)]
+pub use coordinator::{
+    ConfigCoordinator, ConfigCoordinatorError, ConfigWarning, PublishedConfig, StartWithWindows,
+    StartWithWindowsOutcome, StartWithWindowsState, StoreOperation,
+};
 #[allow(unused_imports)]
 pub use evaluation::EvaluatedAction;
 #[allow(unused_imports)]
