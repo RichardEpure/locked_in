@@ -127,7 +127,7 @@ fn AutomationsView(props: SelectionProps) -> Element {
         aside {
             class: "entity-list",
             header {
-                div { h1 { "Automations" } p { "Ordered event decisions" } }
+                div { h1 { "Automations" } p { "Run actions when windows match" } }
                 button {
                     class: "icon-button primary",
                     aria_label: "New automation",
@@ -344,15 +344,15 @@ fn AutomationEditor(props: AutomationEditorProps) -> Element {
         div {
             class: "editor-scroll",
             section { class: "editor-card overview-card",
-                div { class: "section-heading", span { class: "step", "01" } div { h3 { "Automation" } p { "Identity and activation state" } } }
+                div { class: "section-heading", span { class: "step", "01" } div { h3 { "Automation" } p { "Name this automation and choose when it is active" } } }
                 div { class: "form-grid two",
                     label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().name = event.value() } }
-                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().enabled = event.checked() } small { "Incomplete disabled automations can be saved as drafts." } }
+                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().enabled = event.checked() } small { "Leave this off to save an incomplete draft; turn it on when ready to run." } }
                 }
             }
             section { class: "editor-card trigger-card",
-                div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "The event that starts evaluation" } } }
-                div { class: "trigger-summary", span { class: "trigger-icon", "W" } div { strong { "Focused window changes" } small { "Evaluate title, class, and executable metadata" } } span { class: "pill", "Windows" } }
+                div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "This automation runs when focus moves to another window" } } }
+                div { class: "trigger-summary", span { class: "trigger-icon", "W" } div { strong { "Focused window changes" } small { "Match title, class, and executable details in the cases below" } } span { class: "pill", "Windows" } }
             }
             section { class: "editor-card",
                 div { class: "section-heading split", span { class: "step", "03" } div { h3 { "Cases" } p { "Evaluated from top to bottom; first match wins" } }
@@ -820,7 +820,7 @@ fn DevicesView(props: SelectionProps) -> Element {
     });
     rsx! {
         aside { class: "entity-list",
-            header { div { h1 { "Devices" } p { "Reusable HID destinations" } }
+            header { div { h1 { "Devices" } p { "HID destinations for report actions" } }
                 button { class: "icon-button primary", aria_label: "New device", disabled: navigation_locked, onclick: move |_| {
                     let mut config = CONFIG_SIGNAL.read().clone();
                     let id = config.next_id("device");
@@ -983,10 +983,10 @@ fn DeviceEditor(props: EntityIdProps) -> Element {
             }, "Delete" }
         }
         div { class: "editor-scroll",
-            section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Identity" } p { "Stable references used by automations" } } }
+            section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Identity" } p { "Name this device for use in report destinations" } } }
                 div { class: "form-grid two", label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().name = event.value() } } label { "Stable ID" input { value: "{snapshot.id}", disabled: true } } }
             }
-            section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "HID interface" } p { "Decimal values; firmware-level configuration remains visible" } } }
+            section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "HID interface" } p { "Enter decimal HID identifiers and report settings" } } }
                 div { class: "form-grid three",
                     NumericField { label: "Vendor ID", value: snapshot.vid, on_change: move |value| draft.write().vid = value }
                     NumericField { label: "Product ID", value: snapshot.pid, on_change: move |value| draft.write().pid = value }
@@ -995,7 +995,7 @@ fn DeviceEditor(props: EntityIdProps) -> Element {
                     NumericField { label: "Report length", value: snapshot.report_length, on_change: move |value| draft.write().report_length = value }
                     label { "Report ID" input { type: "number", min: "0", max: "255", value: "{snapshot.report_id}", oninput: move |event| if let Ok(value) = event.value().parse() { draft.write().report_id = value } } }
                 }
-                div { class: "device-note", strong { "Connected-device adoption" } p { "Discovery remains available from the device list refresh; manual values are never hidden or replaced without confirmation." } }
+                div { class: "device-note", strong { "Use a connected device" } p { "Use Connected interfaces to add or select a detected device, or enter HID values manually." } }
             }
             if !references.is_empty() { section { class: "editor-card references", h3 { "Used by" } p { "{references_text}" } } }
         }
@@ -1068,9 +1068,9 @@ fn SettingsView() -> Element {
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Startup and tray" } p { "Locked In continues running when its window is closed" } } }
                     label { class: "setting-row", div { strong { "Start minimized" } small { "Hide the window after launch" } } input { type: "checkbox", checked: snapshot.start_minimized, onchange: move |event| draft.write().start_minimized = event.checked() } }
                     label { class: "setting-row", div { strong { "Close to tray" } small { "Keep automations active after closing the window" } } input { type: "checkbox", checked: snapshot.close_to_tray, onchange: move |event| draft.write().close_to_tray = event.checked() } }
-                    label { class: "setting-row", div { strong { "Start with Windows" } small { "Register for the current user; no administrator access required" } } input { type: "checkbox", checked: snapshot.start_with_windows, onchange: move |event| draft.write().start_with_windows = event.checked() } }
+                    label { class: "setting-row", div { strong { "Start with Windows" } small { "Launch Locked In when you sign in to Windows" } } input { type: "checkbox", checked: snapshot.start_with_windows, onchange: move |event| draft.write().start_with_windows = event.checked() } }
                 }
-                section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "Configuration" } p { "Edit TOML externally, then explicitly reload" } } }
+                section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "Configuration" } p { "Open the TOML file, then reload changes from disk" } } }
                     div { class: "settings-actions",
                         button { class: "button secondary", onclick: move |_| if let Ok(path) = config::config_path() { let _ = Command::new("notepad.exe").arg(path).spawn(); }, "Open config file" }
                         button { class: "button secondary", onclick: move |_| match config::Config::load() {
@@ -1090,7 +1090,7 @@ fn SettingsView() -> Element {
                         }, "Reload from disk" }
                     }
                 }
-                section { class: "editor-card", div { class: "section-heading", span { class: "step", "03" } div { h3 { "Diagnostics" } p { "Rotating plain-text logs for event and HID debugging" } } }
+                section { class: "editor-card", div { class: "section-heading", span { class: "step", "03" } div { h3 { "Diagnostics" } p { "Choose log detail for automation and HID troubleshooting" } } }
                     div { class: "form-grid two", label { "Log level" select { value: log_level_name(snapshot.log_level), onchange: move |event| draft.write().log_level = parse_log_level(&event.value()), option { value: "error", "Error" } option { value: "info", "Info" } option { value: "debug", "Debug" } } }
                         div { class: "settings-actions align-end", button { class: "button secondary", onclick: move |_| if let Ok(path) = app_log::log_directory() { let _ = Command::new("explorer.exe").arg(path).spawn(); }, "Open log folder" } }
                     }
