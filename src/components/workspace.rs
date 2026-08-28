@@ -35,7 +35,7 @@ pub(super) fn Workspace() -> Element {
             div { class: "load-error",
                 div { class: "brand", span { class: "brand__mark", "LI" } span { "Locked In" } }
                 section { h1 { "Configuration could not be loaded" }
-                    p { "Locked In will not overwrite this file. Convert it to schema version 2, then restart the application." }
+                    p { "Locked In is running without active configuration and will not overwrite an existing configuration file. Correct the startup error, then restart the application." }
                     pre { "{error}" }
                     button { class: "button secondary", onclick: move |_| if let Ok(path) = config::config_path() { let _ = Command::new("notepad.exe").arg(path).spawn(); }, "Open config file" }
                 }

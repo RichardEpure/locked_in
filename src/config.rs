@@ -1,7 +1,12 @@
-// Runtime publication will consume this module after the coordinator cutover.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "UI coordinator migration follows in L-0014 through L-0016"
+)]
 mod active;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "UI coordinator migration follows in L-0014 through L-0016"
+)]
 mod coordinator;
 mod encoding;
 mod evaluation;
@@ -10,7 +15,10 @@ mod paths;
 mod store;
 mod validation;
 
-use std::{path::PathBuf, sync::LazyLock};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{Result, anyhow};
 
@@ -35,24 +43,37 @@ pub use validation::ValidationError;
 
 pub type Config = EditableConfig;
 
-static APPLICATION_PATHS: LazyLock<Result<ApplicationPaths, String>> =
-    LazyLock::new(|| resolve_application_paths().map_err(|error| format!("{error:#}")));
-static CONFIG_STORE: LazyLock<Result<ConfigStore, String>> = LazyLock::new(|| {
-    application_paths()
-        .map(|paths| ConfigStore::new(paths.config_path()))
-        .map_err(|error| format!("{error:#}"))
-});
+struct ConfigFacade {
+    paths: ApplicationPaths,
+    store: Arc<ConfigStore>,
+}
+
+static CONFIG_FACADE: OnceLock<ConfigFacade> = OnceLock::new();
+
+pub fn initialize_facade(
+    paths: ApplicationPaths,
+    store: Arc<ConfigStore>,
+) -> std::result::Result<(), &'static str> {
+    if store.path() != paths.config_path() {
+        return Err("configuration store does not belong to the resolved application paths");
+    }
+    CONFIG_FACADE
+        .set(ConfigFacade { paths, store })
+        .map_err(|_| "configuration facade is already initialized")
+}
+
+fn facade() -> Result<&'static ConfigFacade> {
+    CONFIG_FACADE
+        .get()
+        .ok_or_else(|| anyhow!("configuration facade is unavailable"))
+}
 
 pub fn application_paths() -> Result<&'static ApplicationPaths> {
-    APPLICATION_PATHS
-        .as_ref()
-        .map_err(|error| anyhow!(error.clone()))
+    Ok(&facade()?.paths)
 }
 
 fn config_store() -> Result<&'static ConfigStore> {
-    CONFIG_STORE
-        .as_ref()
-        .map_err(|error| anyhow!(error.clone()))
+    Ok(&facade()?.store)
 }
 
 pub fn load() -> Result<Config> {
@@ -65,8 +86,4 @@ pub fn save(config: &Config) -> Result<()> {
 
 pub fn config_path() -> Result<PathBuf> {
     Ok(application_paths()?.config_path())
-}
-
-pub fn data_directory() -> Result<PathBuf> {
-    Ok(application_paths()?.data_root().to_path_buf())
 }

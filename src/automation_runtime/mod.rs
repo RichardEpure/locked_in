@@ -218,26 +218,36 @@ pub(crate) struct AutomationRuntime {
 }
 
 impl AutomationRuntime {
+    #[cfg(test)]
     pub fn start(
         initial_config: Option<Config>,
         focus_events: watch::Receiver<ForegroundObservation>,
         focus_source: FocusSourceState,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
-        Self::start_inner(initial_config, focus_events, focus_source, backend, None)
+        let initial_config = initial_config
+            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
+            .transpose()
+            .map_err(format_compilation_errors)?;
+        Self::start_active_inner(initial_config, focus_events, focus_source, backend, None)
     }
 
-    fn start_inner(
-        initial_config: Option<Config>,
+    pub fn start_active(
+        initial_config: Option<Arc<ActiveConfig>>,
+        focus_events: watch::Receiver<ForegroundObservation>,
+        focus_source: FocusSourceState,
+        backend: impl HidBackend,
+    ) -> Result<(Self, RuntimeOwner)> {
+        Self::start_active_inner(initial_config, focus_events, focus_source, backend, None)
+    }
+
+    fn start_active_inner(
+        initial_config: Option<Arc<ActiveConfig>>,
         focus_events: watch::Receiver<ForegroundObservation>,
         focus_source: FocusSourceState,
         backend: impl HidBackend,
         initialization_claim_gate: Option<ClaimGate>,
     ) -> Result<(Self, RuntimeOwner)> {
-        let initial_config = initial_config
-            .map(|config| ActiveConfig::compile(&config))
-            .transpose()
-            .map_err(format_compilation_errors)?;
         let (commands, command_rx) = mpsc::channel(ORDINARY_COMMAND_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (status, _) = watch::channel(RuntimeStatus::starting());
@@ -249,7 +259,7 @@ impl AutomationRuntime {
         };
         let has_config = initial_config.is_some();
         let shared = Arc::new(Shared {
-            config: RwLock::new(initial_config.map(Arc::new)),
+            config: RwLock::new(initial_config),
             latest_focus: focus_events.clone(),
             focus_progress: Mutex::new(FocusGenerationMarkers::default()),
             health: Mutex::new(RuntimeHealth {
@@ -310,7 +320,11 @@ impl AutomationRuntime {
     )> {
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let (runtime, owner) = Self::start_inner(
+        let initial_config = initial_config
+            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
+            .transpose()
+            .map_err(format_compilation_errors)?;
+        let (runtime, owner) = Self::start_active_inner(
             initial_config,
             focus_events,
             focus_source,
@@ -324,14 +338,27 @@ impl AutomationRuntime {
     }
 
     pub fn replace_config(&self, config: Config) -> std::result::Result<(), Vec<ValidationError>> {
-        let config = ActiveConfig::compile(&config)?;
+        let config = Arc::new(ActiveConfig::compile(&config)?);
+        self.replace_active_config(config);
+        Ok(())
+    }
+
+    pub(crate) fn replace_active_config(&self, config: Arc<ActiveConfig>) {
         *self
             .shared
             .config
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(config));
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
         self.update_health(|health| health.has_config = true);
-        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_config_snapshot(&self) -> Option<Arc<ActiveConfig>> {
+        self.shared
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     #[cfg(test)]
@@ -643,6 +670,7 @@ impl AutomationRuntime {
     }
 }
 
+#[cfg(test)]
 fn format_compilation_errors(errors: Vec<ValidationError>) -> anyhow::Error {
     let details = errors
         .iter()

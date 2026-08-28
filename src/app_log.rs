@@ -3,7 +3,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        LazyLock, Mutex,
+        LazyLock, Mutex, OnceLock,
         atomic::{AtomicU8, Ordering},
     },
 };
@@ -11,6 +11,7 @@ use std::{
 use crate::config::LogLevel;
 
 static LOG_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static LOG_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LEVEL: AtomicU8 = AtomicU8::new(1);
 const MAX_LOG_SIZE: u64 = 1024 * 1024;
 const LOG_COPIES: usize = 5;
@@ -32,6 +33,10 @@ pub fn set_level(level: LogLevel) {
         },
         Ordering::Relaxed,
     );
+}
+
+pub fn initialize(directory: PathBuf) -> Result<(), PathBuf> {
+    LOG_DIRECTORY.set(directory)
 }
 
 fn write_at(level: u8, message: impl AsRef<str>) {
@@ -63,7 +68,10 @@ fn write_at(level: u8, message: impl AsRef<str>) {
 }
 
 pub fn log_directory() -> anyhow::Result<PathBuf> {
-    Ok(crate::config::data_directory()?.join("logs"))
+    LOG_DIRECTORY
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("application logging is unavailable"))
 }
 
 fn rotate(directory: &std::path::Path) {

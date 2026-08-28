@@ -292,10 +292,10 @@ pub struct ConfigCoordinator {
 
 impl ConfigCoordinator {
     pub fn initial_load(
-        store: ConfigStore,
+        store: Arc<ConfigStore>,
         start_with_windows: Arc<dyn StartWithWindows>,
     ) -> std::result::Result<Self, ConfigCoordinatorError> {
-        Self::initial_load_from(Arc::new(store), start_with_windows)
+        Self::initial_load_from(store, start_with_windows)
     }
 
     #[cfg(test)]

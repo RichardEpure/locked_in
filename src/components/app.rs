@@ -92,6 +92,9 @@ pub(crate) fn App() -> Element {
 
     use_future(move || async move {
         let mut receiver = win::subscribe_focused_window();
+        publish_current_focused_window(&mut receiver, |focused| {
+            *FOCUSED_WINDOW_SIGNAL.write() = focused;
+        });
         while receiver.changed().await.is_ok() {
             *FOCUSED_WINDOW_SIGNAL.write() = receiver.borrow_and_update().clone();
         }
@@ -104,3 +107,13 @@ pub(crate) fn App() -> Element {
         Workspace {}
     }
 }
+
+fn publish_current_focused_window(
+    receiver: &mut tokio::sync::watch::Receiver<win::WindowMetadata>,
+    publish: impl FnOnce(win::WindowMetadata),
+) {
+    publish(receiver.borrow_and_update().clone());
+}
+
+#[cfg(test)]
+mod tests;
