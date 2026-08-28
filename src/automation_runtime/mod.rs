@@ -11,9 +11,9 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{Config, Device, SendAction},
+    config::{ActiveConfig, Config, Device, SendAction, ValidationError},
+    focused_window::ForegroundObservation,
     hid::{HidBackend, HidInventory},
-    win::WindowMetadata,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,8 +129,40 @@ struct Admission {
     shutdown_requested: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FocusGenerationProgress {
+    pub latest_observed: u64,
+    pub latest_started: Option<u64>,
+    pub latest_handled: Option<u64>,
+    pub latest_cancelled: Option<u64>,
+}
+
+#[derive(Default)]
+struct FocusGenerationMarkers {
+    latest_started: Option<u64>,
+    latest_handled: Option<u64>,
+    latest_cancelled: Option<u64>,
+}
+
+enum BoundaryClaim {
+    Shutdown,
+    Focus {
+        observation: ForegroundObservation,
+        config: Option<Arc<ActiveConfig>>,
+    },
+    Command,
+    Wait,
+}
+
+struct ClaimGate {
+    started: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
 struct Shared {
-    config: RwLock<Option<Arc<Config>>>,
+    config: RwLock<Option<Arc<ActiveConfig>>>,
+    latest_focus: watch::Receiver<ForegroundObservation>,
+    focus_progress: Mutex<FocusGenerationMarkers>,
     health: Mutex<RuntimeHealth>,
     status: watch::Sender<RuntimeStatus>,
     #[cfg(test)]
@@ -139,6 +171,9 @@ struct Shared {
     commands: mpsc::Sender<RuntimeCommand>,
     shutdown: watch::Sender<bool>,
     admission: Mutex<Admission>,
+    initialization_claim_gate: Mutex<Option<ClaimGate>>,
+    #[cfg(test)]
+    boundary_claim_gate: Mutex<Option<ClaimGate>>,
 }
 
 enum RuntimeCommand {
@@ -185,10 +220,24 @@ pub(crate) struct AutomationRuntime {
 impl AutomationRuntime {
     pub fn start(
         initial_config: Option<Config>,
-        focus_events: watch::Receiver<WindowMetadata>,
+        focus_events: watch::Receiver<ForegroundObservation>,
         focus_source: FocusSourceState,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
+        Self::start_inner(initial_config, focus_events, focus_source, backend, None)
+    }
+
+    fn start_inner(
+        initial_config: Option<Config>,
+        focus_events: watch::Receiver<ForegroundObservation>,
+        focus_source: FocusSourceState,
+        backend: impl HidBackend,
+        initialization_claim_gate: Option<ClaimGate>,
+    ) -> Result<(Self, RuntimeOwner)> {
+        let initial_config = initial_config
+            .map(|config| ActiveConfig::compile(&config))
+            .transpose()
+            .map_err(format_compilation_errors)?;
         let (commands, command_rx) = mpsc::channel(ORDINARY_COMMAND_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (status, _) = watch::channel(RuntimeStatus::starting());
@@ -201,6 +250,8 @@ impl AutomationRuntime {
         let has_config = initial_config.is_some();
         let shared = Arc::new(Shared {
             config: RwLock::new(initial_config.map(Arc::new)),
+            latest_focus: focus_events.clone(),
+            focus_progress: Mutex::new(FocusGenerationMarkers::default()),
             health: Mutex::new(RuntimeHealth {
                 focus_error,
                 refresh_error: None,
@@ -219,6 +270,9 @@ impl AutomationRuntime {
                 refresh_pending: true,
                 shutdown_requested: false,
             }),
+            initialization_claim_gate: Mutex::new(initialization_claim_gate),
+            #[cfg(test)]
+            boundary_claim_gate: Mutex::new(None),
         });
         let runtime = Self { shared };
         let worker_runtime = runtime.clone();
@@ -242,13 +296,42 @@ impl AutomationRuntime {
         Ok((runtime, owner))
     }
 
-    pub fn replace_config(&self, config: Config) {
+    #[cfg(test)]
+    fn start_with_initialization_claim_gate(
+        initial_config: Option<Config>,
+        focus_events: watch::Receiver<ForegroundObservation>,
+        focus_source: FocusSourceState,
+        backend: impl HidBackend,
+    ) -> Result<(
+        Self,
+        RuntimeOwner,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    )> {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (runtime, owner) = Self::start_inner(
+            initial_config,
+            focus_events,
+            focus_source,
+            backend,
+            Some(ClaimGate {
+                started: started_tx,
+                release: release_rx,
+            }),
+        )?;
+        Ok((runtime, owner, started_rx, release_tx))
+    }
+
+    pub fn replace_config(&self, config: Config) -> std::result::Result<(), Vec<ValidationError>> {
+        let config = ActiveConfig::compile(&config)?;
         *self
             .shared
             .config
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(config));
         self.update_health(|health| health.has_config = true);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -258,6 +341,25 @@ impl AutomationRuntime {
 
     pub fn subscribe_status(&self) -> watch::Receiver<RuntimeStatus> {
         self.shared.status.subscribe()
+    }
+
+    #[allow(
+        dead_code,
+        reason = "diagnostic snapshot is currently exercised by runtime tests"
+    )]
+    pub fn focus_progress_snapshot(&self) -> FocusGenerationProgress {
+        let latest_focus = self.shared.latest_focus.borrow();
+        let markers = self
+            .shared
+            .focus_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        FocusGenerationProgress {
+            latest_observed: latest_focus.generation,
+            latest_started: markers.latest_started,
+            latest_handled: markers.latest_handled,
+            latest_cancelled: markers.latest_cancelled,
+        }
     }
 
     #[cfg(test)]
@@ -360,12 +462,126 @@ impl AutomationRuntime {
         self.shared.shutdown.send_replace(true);
     }
 
-    fn config_snapshot(&self) -> Option<Arc<Config>> {
-        self.shared
+    fn claim_initialization(&self) -> bool {
+        let admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !admission.shutdown_requested {
+            return true;
+        }
+
+        let latest_focus = self.shared.latest_focus.borrow();
+        if latest_focus.generation != 0 {
+            self.shared
+                .focus_progress
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .latest_cancelled = Some(latest_focus.generation);
+        }
+        false
+    }
+
+    fn wait_before_initialization_claim(&self) {
+        let gate = self
+            .shared
+            .initialization_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
+    }
+
+    fn claim_boundary(
+        &self,
+        focus_events: &mut watch::Receiver<ForegroundObservation>,
+        handled_generation: u64,
+        command_staged: bool,
+    ) -> BoundaryClaim {
+        // This order defines the batch claim. The guards stay held through the config clone and
+        // started/cancelled mark; operations completing after their release belong to a later batch.
+        let admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = self
+            .shared
             .config
             .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let observation = focus_events.borrow_and_update();
+        let mut progress = self
+            .shared
+            .focus_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let claim = if admission.shutdown_requested {
+            if observation.generation > handled_generation {
+                progress.latest_cancelled = Some(observation.generation);
+            }
+            BoundaryClaim::Shutdown
+        } else if observation.generation > handled_generation {
+            progress.latest_started = Some(observation.generation);
+            BoundaryClaim::Focus {
+                observation: observation.clone(),
+                config: config.clone(),
+            }
+        } else if command_staged {
+            BoundaryClaim::Command
+        } else {
+            BoundaryClaim::Wait
+        };
+
+        drop(progress);
+        drop(observation);
+        drop(config);
+        drop(admission);
+        claim
+    }
+
+    fn mark_focus_handled(&self, generation: u64) {
+        self.shared
+            .focus_progress
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .latest_handled = Some(generation);
+    }
+
+    #[cfg(test)]
+    fn gate_next_focus_boundary_claim(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .shared
+            .boundary_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ClaimGate {
+            started: started_tx,
+            release: release_rx,
+        });
+        (started_rx, release_tx)
+    }
+
+    #[cfg(test)]
+    fn wait_before_focus_boundary_claim(&self) {
+        let gate = self
+            .shared
+            .boundary_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
     }
 
     fn update_health(&self, update: impl FnOnce(&mut RuntimeHealth)) {
@@ -425,6 +641,15 @@ impl AutomationRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
+}
+
+fn format_compilation_errors(errors: Vec<ValidationError>) -> anyhow::Error {
+    let details = errors
+        .iter()
+        .map(|error| format!("{}: {}", error.path, error.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    anyhow::anyhow!("configuration could not be activated: {details}")
 }
 
 pub(crate) struct RuntimeOwner {

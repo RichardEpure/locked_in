@@ -159,7 +159,6 @@ impl ForegroundPublisher {
 static FOREGROUND_PUBLISHER: LazyLock<ForegroundPublisher> =
     LazyLock::new(ForegroundPublisher::new);
 
-#[expect(dead_code, reason = "the versioned receiver is consumed by L-0012")]
 pub fn subscribe_foreground_observations() -> watch::Receiver<ForegroundObservation> {
     FOREGROUND_PUBLISHER.subscribe_observations()
 }

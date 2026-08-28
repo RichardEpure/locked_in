@@ -96,7 +96,7 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
                     let mut next = CONFIG_SIGNAL.read().clone();
                     next.devices.retain(|device| device.id != delete_id);
                     match config::save(&next) {
-                        Ok(()) => { delete_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; selected.set(None); }
+                        Ok(()) => { delete_runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; selected.set(None); }
                         Err(error) => message.set(Some((false, format!("Delete failed: {error}")))),
                     }
                 } else {
@@ -141,7 +141,7 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
                     let mut next = CONFIG_SIGNAL.read().clone();
                     if let Some(index) = next.devices.iter().position(|item| item.id == save_id) { next.devices[index] = draft(); }
                     let errors = next.validate();
-                    if errors.is_empty() { match config::save(&next) { Ok(()) => { save_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *UNSAVED_ENTITY_SIGNAL.write() = None; *DIRTY_EDITOR_SIGNAL.write() = None; message.set(Some((true, "Device saved".into()))); }, Err(error) => message.set(Some((false, error.to_string()))) } }
+                    if errors.is_empty() { match config::save(&next) { Ok(()) => { save_runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *UNSAVED_ENTITY_SIGNAL.write() = None; *DIRTY_EDITOR_SIGNAL.write() = None; message.set(Some((true, "Device saved".into()))); }, Err(error) => message.set(Some((false, error.to_string()))) } }
                     else { message.set(Some((false, errors[0].message.clone()))); }
                 }, "Save device" }
             }

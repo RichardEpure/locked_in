@@ -126,7 +126,7 @@ fn main() {
     if let Some(error) = &CONFIG_BOOTSTRAP.error {
         app_log::write_error(format!("configuration load failed: {error}"));
     }
-    let focus_events = win::subscribe_focused_window();
+    let focus_events = win::subscribe_foreground_observations();
     let (_foreground_hook, focus_source) = match win::start_foreground_hook() {
         Ok(hook) => (Some(hook), automation_runtime::FocusSourceState::Available),
         Err(error) => {

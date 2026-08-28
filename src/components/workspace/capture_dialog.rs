@@ -69,7 +69,7 @@ pub(super) fn CaptureDialog() -> Element {
                             message.set("Case no longer exists".into()); return;
                         }
                         match config::save(&next) {
-                            Ok(()) => { runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
+                            Ok(()) => { runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
                             Err(error) => message.set(format!("Could not save matcher: {error}")),
                         }
                     }, "Add matcher" }

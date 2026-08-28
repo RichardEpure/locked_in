@@ -52,7 +52,9 @@ pub(super) fn SettingsView() -> Element {
                                     app_log::set_level(config.settings.log_level);
                                     reload_window.set_close_behavior(if config.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
                                     draft.set(config.settings.clone());
-                                    reload_runtime.replace_config(config.clone());
+                                    reload_runtime
+                                        .replace_config(config.clone())
+                                        .expect("loaded configuration must compile");
                                     *CONFIG_SIGNAL.write() = config;
                                     *CONFIG_REVISION_SIGNAL.write() += 1;
                                     *DIRTY_EDITOR_SIGNAL.write() = None;
@@ -82,7 +84,9 @@ pub(super) fn SettingsView() -> Element {
                             Ok(()) => {
                                 app_log::set_level(next.settings.log_level);
                                 window.set_close_behavior(if next.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
-                                save_runtime.replace_config(next.clone());
+                                save_runtime
+                                    .replace_config(next.clone())
+                                    .expect("saved configuration must compile");
                                 *CONFIG_SIGNAL.write() = next;
                                 *DIRTY_EDITOR_SIGNAL.write() = None;
                                 message.set("Settings saved".into());

@@ -3,18 +3,19 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    AutomationRuntime, RuntimeCommand, RuntimeLifecycle, RuntimeRequestError, TestDispatchResult,
+    AutomationRuntime, BoundaryClaim, RuntimeCommand, RuntimeLifecycle, RuntimeRequestError,
+    TestDispatchResult,
 };
 use crate::{
     app_log,
-    config::{Device, SendAction},
+    config::{ActiveConfig, Device, SendAction},
+    focused_window::ForegroundObservation,
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
-    win::WindowMetadata,
 };
 
 pub(super) fn run(
     runtime: AutomationRuntime,
-    focus_events: watch::Receiver<WindowMetadata>,
+    focus_events: watch::Receiver<ForegroundObservation>,
     commands: mpsc::Receiver<RuntimeCommand>,
     shutdown: watch::Receiver<bool>,
     backend: Box<dyn HidBackend>,
@@ -58,32 +59,74 @@ pub(super) fn run(
 
 async fn run_loop(
     runtime: AutomationRuntime,
-    mut focus_events: watch::Receiver<WindowMetadata>,
+    mut focus_events: watch::Receiver<ForegroundObservation>,
     mut commands: mpsc::Receiver<RuntimeCommand>,
     mut shutdown: watch::Receiver<bool>,
     mut backend: Box<dyn HidBackend>,
 ) {
+    runtime.wait_before_initialization_claim();
+    if !runtime.claim_initialization() {
+        cancel_pending_commands(&runtime, None, &mut commands);
+        runtime.update_health(|health| {
+            health.lifecycle = RuntimeLifecycle::Stopped;
+        });
+        return;
+    }
     refresh_hid(&runtime, backend.as_mut(), true);
 
     let mut focus_open = true;
+    let mut commands_open = true;
+    let mut handled_focus_generation = 0;
+    let mut staged_command = None;
     loop {
+        #[cfg(test)]
+        if focus_events.borrow().generation > handled_focus_generation {
+            runtime.wait_before_focus_boundary_claim();
+        }
+        match runtime.claim_boundary(
+            &mut focus_events,
+            handled_focus_generation,
+            staged_command.is_some(),
+        ) {
+            BoundaryClaim::Shutdown => {
+                cancel_pending_commands(&runtime, staged_command.take(), &mut commands);
+                break;
+            }
+            BoundaryClaim::Focus {
+                observation,
+                config,
+            } => {
+                dispatch_focus(&runtime, backend.as_mut(), &observation, config.as_deref());
+                handled_focus_generation = observation.generation;
+                runtime.mark_focus_handled(observation.generation);
+                continue;
+            }
+            BoundaryClaim::Command => {
+                execute_command(
+                    &runtime,
+                    backend.as_mut(),
+                    staged_command
+                        .take()
+                        .expect("boundary claimed a staged command"),
+                );
+                continue;
+            }
+            BoundaryClaim::Wait => {}
+        }
+
+        match commands.try_recv() {
+            Ok(command) => {
+                staged_command = Some(command);
+                continue;
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => commands_open = false,
+            Err(mpsc::error::TryRecvError::Empty) => {}
+        }
+
         tokio::select! {
             biased;
             changed = shutdown.changed() => {
                 debug_assert!(changed.is_ok() && *shutdown.borrow_and_update());
-                break;
-            }
-            command = commands.recv() => {
-                match command {
-                    Some(RuntimeCommand::TestAction { action, devices, response }) => {
-                        let result = dispatch_test(&runtime, backend.as_mut(), &action, &devices);
-                        let _ = response.send(Ok(result));
-                    }
-                    Some(RuntimeCommand::RefreshHid) => {
-                        refresh_hid(&runtime, backend.as_mut(), false);
-                    }
-                    None => break,
-                }
             }
             changed = focus_events.changed(), if focus_open => {
                 if changed.is_err() {
@@ -91,26 +134,60 @@ async fn run_loop(
                     runtime.update_health(|health| {
                         health.focus_error = Some("focus event source closed".to_string());
                     });
-                    continue;
                 }
-                let focused = focus_events.borrow_and_update().clone();
-                dispatch_focus(&runtime, backend.as_mut(), &focused);
+            }
+            command = commands.recv(), if commands_open => {
+                match command {
+                    Some(command) => staged_command = Some(command),
+                    None => commands_open = false,
+                }
             }
         }
     }
 
-    cancel_queued_commands(&mut commands);
     runtime.update_health(|health| {
         health.lifecycle = RuntimeLifecycle::Stopped;
     });
 }
 
-fn cancel_queued_commands(commands: &mut mpsc::Receiver<RuntimeCommand>) {
-    commands.close();
-    while let Ok(command) = commands.try_recv() {
-        if let RuntimeCommand::TestAction { response, .. } = command {
-            let _ = response.send(Err(RuntimeRequestError::Cancelled));
+fn execute_command(
+    runtime: &AutomationRuntime,
+    backend: &mut dyn HidBackend,
+    command: RuntimeCommand,
+) {
+    match command {
+        RuntimeCommand::TestAction {
+            action,
+            devices,
+            response,
+        } => {
+            let result = dispatch_test(runtime, backend, &action, &devices);
+            let _ = response.send(Ok(result));
         }
+        RuntimeCommand::RefreshHid => {
+            refresh_hid(runtime, backend, false);
+        }
+    }
+}
+
+fn cancel_pending_commands(
+    runtime: &AutomationRuntime,
+    staged: Option<RuntimeCommand>,
+    commands: &mut mpsc::Receiver<RuntimeCommand>,
+) {
+    commands.close();
+    if let Some(command) = staged {
+        cancel_command(command);
+    }
+    while let Ok(command) = commands.try_recv() {
+        cancel_command(command);
+    }
+    runtime.close_admission();
+}
+
+fn cancel_command(command: RuntimeCommand) {
+    if let RuntimeCommand::TestAction { response, .. } = command {
+        let _ = response.send(Err(RuntimeRequestError::Cancelled));
     }
 }
 
@@ -162,28 +239,31 @@ fn send_report(
 fn dispatch_focus(
     runtime: &AutomationRuntime,
     backend: &mut dyn HidBackend,
-    focused: &WindowMetadata,
+    focused: &ForegroundObservation,
+    config: Option<&ActiveConfig>,
 ) {
-    let Some(config) = runtime.config_snapshot() else {
+    let Some(config) = config else {
         return;
     };
     let mut attempted = false;
     let mut last_error = None;
-    for evaluated in config.evaluate_window(focused) {
-        for device in evaluated.devices {
+    for evaluated in config.evaluate_window(&focused.window) {
+        for device in evaluated.destinations() {
             attempted = true;
-            match send_report(runtime, backend, device, &evaluated.action.report) {
+            match send_report(runtime, backend, device, evaluated.report()) {
                 Ok(()) => app_log::write(format!(
                     "{} / {} sent {} bytes to {}",
-                    evaluated.automation_name,
-                    evaluated.case_name,
-                    evaluated.action.report.len(),
+                    evaluated.automation_name(),
+                    evaluated.case_name(),
+                    evaluated.report().len(),
                     device.name
                 )),
                 Err(error) => {
                     let message = format!(
                         "{} / {} failed for {}: {error:#}",
-                        evaluated.automation_name, evaluated.case_name, device.name
+                        evaluated.automation_name(),
+                        evaluated.case_name(),
+                        device.name
                     );
                     app_log::write_error(&message);
                     last_error = Some(message);
