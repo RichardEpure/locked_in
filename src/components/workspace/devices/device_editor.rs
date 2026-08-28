@@ -1,6 +1,9 @@
 use dioxus::prelude::*;
 
-use crate::{CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, hid};
+use crate::{
+    CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
+    automation_runtime::AutomationRuntime, hid,
+};
 
 use super::numeric_field::NumericField;
 
@@ -12,6 +15,7 @@ pub(super) struct EntityIdProps {
 
 #[component]
 pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
+    let runtime = consume_context::<AutomationRuntime>();
     let mut selected = props.selected;
     let delete_id = props.id.clone();
     let save_id = props.id.clone();
@@ -65,6 +69,8 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
     let references_text = references.join(", ");
     let delete_references = references.clone();
     let delete_references_text = references_text.clone();
+    let delete_runtime = runtime.clone();
+    let save_runtime = runtime.clone();
     rsx! {
         header { class: "workspace-header", div { div { class: "eyebrow", "HID DESTINATION" } h2 { "{snapshot.name}" } p { if hid::is_connected(&snapshot) { "Connected and available" } else { "Saved offline · waiting for matching interface" } } }
             button { class: "button danger-ghost", onclick: move |_| {
@@ -74,7 +80,7 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
                     let mut next = CONFIG_SIGNAL.read().clone();
                     next.devices.retain(|device| device.id != delete_id);
                     match next.save() {
-                        Ok(()) => { *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; selected.set(None); }
+                        Ok(()) => { delete_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; selected.set(None); }
                         Err(error) => message.set(Some((false, format!("Delete failed: {error}")))),
                     }
                 } else {
@@ -119,7 +125,7 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
                     let mut next = CONFIG_SIGNAL.read().clone();
                     if let Some(index) = next.devices.iter().position(|item| item.id == save_id) { next.devices[index] = draft(); }
                     let errors = next.validate();
-                    if errors.is_empty() { match next.save() { Ok(()) => { *CONFIG_SIGNAL.write() = next; *UNSAVED_ENTITY_SIGNAL.write() = None; *DIRTY_EDITOR_SIGNAL.write() = None; message.set(Some((true, "Device saved".into()))); }, Err(error) => message.set(Some((false, error.to_string()))) } }
+                    if errors.is_empty() { match next.save() { Ok(()) => { save_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *UNSAVED_ENTITY_SIGNAL.write() = None; *DIRTY_EDITOR_SIGNAL.write() = None; message.set(Some((true, "Device saved".into()))); }, Err(error) => message.set(Some((false, error.to_string()))) } }
                     else { message.set(Some((false, errors[0].message.clone()))); }
                 }, "Save device" }
             }

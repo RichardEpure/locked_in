@@ -34,6 +34,10 @@ pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock
     tx
 });
 
+pub fn subscribe_focused_window() -> watch::Receiver<WindowMetadata> {
+    FOCUSED_WINDOW_TX.subscribe()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct WindowMetadata {
     pub title: Option<String>,
@@ -136,7 +140,7 @@ pub fn set_focused_window(window: WindowMetadata) {
     match FOCUSED_WINDOW.lock() {
         Ok(mut guard) => {
             *guard = window.clone();
-            let _ = FOCUSED_WINDOW_TX.send(window);
+            FOCUSED_WINDOW_TX.send_replace(window);
         }
         Err(e) => {
             eprintln!("update_focused_window: failed to acquire lock: {}", e);

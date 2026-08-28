@@ -2,13 +2,14 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURED_WINDOW_SIGNAL, CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL,
-    cancel_capture,
+    automation_runtime::AutomationRuntime, cancel_capture,
 };
 
 use super::automations::insert_captured_matcher;
 
 #[component]
 pub(super) fn CaptureDialog() -> Element {
+    let runtime = consume_context::<AutomationRuntime>();
     let captured = CAPTURED_WINDOW_SIGNAL.read().clone().unwrap_or_default();
     let mut automation_id = use_signal(String::new);
     let mut case_id = use_signal(String::new);
@@ -68,7 +69,7 @@ pub(super) fn CaptureDialog() -> Element {
                             message.set("Case no longer exists".into()); return;
                         }
                         match next.save() {
-                            Ok(()) => { *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
+                            Ok(()) => { runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
                             Err(error) => message.set(format!("Could not save matcher: {error}")),
                         }
                     }, "Add matcher" }

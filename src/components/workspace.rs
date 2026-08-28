@@ -4,7 +4,9 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR, DIRTY_EDITOR_SIGNAL,
-    HID_CACHE_REVISION_SIGNAL, SERVICE_READY, config,
+    HID_CACHE_REVISION_SIGNAL,
+    automation_runtime::{AutomationRuntime, RuntimePhase},
+    config,
 };
 
 use self::{
@@ -43,7 +45,28 @@ pub(super) fn Workspace() -> Element {
     let mut section = use_signal(|| Section::Automations);
     let selected_automation = use_signal(|| None::<String>);
     let selected_device = use_signal(|| None::<String>);
-    let service_ready = SERVICE_READY.load(std::sync::atomic::Ordering::Relaxed);
+    let runtime = consume_context::<AutomationRuntime>();
+    let status_receiver = runtime.subscribe_status();
+    let initial_status = status_receiver.borrow().clone();
+    let mut runtime_status = use_signal(move || initial_status);
+    use_future(move || {
+        let mut receiver = status_receiver.clone();
+        async move {
+            while receiver.changed().await.is_ok() {
+                runtime_status.set(receiver.borrow_and_update().clone());
+            }
+        }
+    });
+    let status = runtime_status();
+    let (status_class, status_text) = match status.phase {
+        RuntimePhase::Starting => ("status-dot", "Automation starting"),
+        RuntimePhase::Active => ("status-dot online", "Automation active"),
+        RuntimePhase::Degraded => ("status-dot warning", "Automation active with warnings"),
+        RuntimePhase::Unavailable => ("status-dot error", "Automation unavailable"),
+        RuntimePhase::Stopping => ("status-dot", "Automation stopping"),
+        RuntimePhase::Stopped => ("status-dot error", "Automation stopped"),
+    };
+    let status_detail = status.detail.unwrap_or_default();
     let _hid_cache_revision = *HID_CACHE_REVISION_SIGNAL.read();
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
@@ -96,7 +119,7 @@ pub(super) fn Workspace() -> Element {
                     span { class: "nav-item__icon", "S" }
                     span { class: "nav-item__label", "Settings" }
                 }
-                div { class: "app-nav__status", span { class: if service_ready { "status-dot online" } else { "status-dot error" } } if service_ready { "Automation service active" } else { "Automation service unavailable" } }
+                div { class: "app-nav__status", title: "{status_detail}", span { class: status_class } "{status_text}" }
             }
             match section() {
                 Section::Automations => rsx! { AutomationsView { selected: selected_automation } },

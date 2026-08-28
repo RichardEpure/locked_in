@@ -1,16 +1,11 @@
 mod app_log;
+mod automation_runtime;
 mod components;
 mod config;
 mod hid;
 mod win;
 
-use std::{
-    io::Write,
-    sync::{
-        LazyLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{io::Write, sync::LazyLock};
 
 use dioxus::{
     desktop::{Config as DesktopConfig, LogicalSize, WindowBuilder},
@@ -28,7 +23,6 @@ pub static CONFIG_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static HID_CACHE_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 pub static UNSAVED_ENTITY_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
-pub static SERVICE_READY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureTarget {
@@ -68,17 +62,30 @@ pub fn cancel_capture() {
     *CAPTURE_GENERATION_SIGNAL.write() += 1;
 }
 
-pub static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(|| {
-    config::Config::load().unwrap_or_else(|error| {
-        app_log::write_error(format!("configuration load failed: {error:#}"));
-        config::Config::default()
-    })
-});
-pub static CONFIG_LOAD_ERROR: LazyLock<Option<String>> = LazyLock::new(|| {
-    config::Config::load()
-        .err()
-        .map(|error| format!("{error:#}"))
-});
+struct ConfigBootstrap {
+    active: Option<config::Config>,
+    ui: config::Config,
+    error: Option<String>,
+}
+
+static CONFIG_BOOTSTRAP: LazyLock<ConfigBootstrap> =
+    LazyLock::new(|| match config::Config::load() {
+        Ok(config) => ConfigBootstrap {
+            active: Some(config.clone()),
+            ui: config,
+            error: None,
+        },
+        Err(error) => ConfigBootstrap {
+            active: None,
+            ui: config::Config::default(),
+            error: Some(format!("{error:#}")),
+        },
+    });
+
+pub static CONFIG_SIGNAL: GlobalSignal<config::Config> =
+    Signal::global(|| CONFIG_BOOTSTRAP.ui.clone());
+pub static CONFIG_LOAD_ERROR: LazyLock<Option<String>> =
+    LazyLock::new(|| CONFIG_BOOTSTRAP.error.clone());
 
 fn install_panic_log(mut log_path: std::path::PathBuf) {
     log_path.push("panic.log");
@@ -108,25 +115,42 @@ fn main() {
             }
         }
     };
-    let _foreground_hook = match win::start_foreground_hook() {
-        Ok(hook) => {
-            SERVICE_READY.store(true, Ordering::Relaxed);
-            Some(hook)
-        }
-        Err(error) => {
-            app_log::write_error(format!("foreground hook failed: {error:#}"));
-            None
-        }
-    };
     let data_directory = config::data_directory().unwrap_or_else(|error| {
         eprintln!("data directory unavailable: {error:#}");
         std::env::temp_dir().join("LockedIn")
     });
     let _ = std::fs::create_dir_all(&data_directory);
     install_panic_log(data_directory.clone());
-    app_log::write("application started");
-    let settings = config::Config::load().unwrap_or_default().settings;
+    let settings = CONFIG_BOOTSTRAP.ui.settings.clone();
     app_log::set_level(settings.log_level);
+    app_log::write("application started");
+    if let Some(error) = &CONFIG_BOOTSTRAP.error {
+        app_log::write_error(format!("configuration load failed: {error}"));
+    }
+    let focus_events = win::subscribe_focused_window();
+    let (_foreground_hook, focus_source) = match win::start_foreground_hook() {
+        Ok(hook) => (Some(hook), automation_runtime::FocusSourceState::Available),
+        Err(error) => {
+            let message = format!("foreground hook failed: {error:#}");
+            app_log::write_error(&message);
+            (
+                None,
+                automation_runtime::FocusSourceState::Unavailable(message),
+            )
+        }
+    };
+    let (runtime, runtime_owner) = match automation_runtime::AutomationRuntime::start(
+        CONFIG_BOOTSTRAP.active.clone(),
+        focus_events,
+        focus_source,
+        hid::SystemReportDispatcher,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            app_log::write_error(format!("automation runtime failed to start: {error:#}"));
+            return;
+        }
+    };
     let close_behaviour = if settings.close_to_tray {
         dioxus::desktop::WindowCloseBehaviour::WindowHides
     } else {
@@ -134,6 +158,7 @@ fn main() {
     };
 
     dioxus::LaunchBuilder::desktop()
+        .with_context(runtime)
         .with_cfg(
             DesktopConfig::new()
                 .with_window(
@@ -150,4 +175,5 @@ fn main() {
                 .with_data_directory(data_directory.join("webview")),
         )
         .launch(components::App);
+    runtime_owner.shutdown_and_join(std::time::Duration::from_secs(2));
 }

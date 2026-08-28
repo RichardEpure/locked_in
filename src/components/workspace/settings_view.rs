@@ -4,13 +4,17 @@ use dioxus::{desktop::use_window, prelude::*};
 
 use crate::{
     CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, app_log,
+    automation_runtime::AutomationRuntime,
     config::{self, LogLevel},
 };
 
 #[component]
 pub(super) fn SettingsView() -> Element {
+    let runtime = consume_context::<AutomationRuntime>();
     let window = use_window();
     let reload_window = window.clone();
+    let reload_runtime = runtime.clone();
+    let save_runtime = runtime.clone();
     let original = CONFIG_SIGNAL.read().settings.clone();
     let previous_startup = original.start_with_windows;
     let mut draft = use_signal(|| original.clone());
@@ -48,6 +52,7 @@ pub(super) fn SettingsView() -> Element {
                                     app_log::set_level(config.settings.log_level);
                                     reload_window.set_close_behavior(if config.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
                                     draft.set(config.settings.clone());
+                                    reload_runtime.replace_config(config.clone());
                                     *CONFIG_SIGNAL.write() = config;
                                     *CONFIG_REVISION_SIGNAL.write() += 1;
                                     *DIRTY_EDITOR_SIGNAL.write() = None;
@@ -77,6 +82,7 @@ pub(super) fn SettingsView() -> Element {
                             Ok(()) => {
                                 app_log::set_level(next.settings.log_level);
                                 window.set_close_behavior(if next.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
+                                save_runtime.replace_config(next.clone());
                                 *CONFIG_SIGNAL.write() = next;
                                 *DIRTY_EDITOR_SIGNAL.write() = None;
                                 message.set("Settings saved".into());

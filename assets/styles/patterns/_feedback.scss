@@ -16,6 +16,11 @@
         background: var(--danger);
         box-shadow: 0 0 0 3px rgb(255 114 127 / 12%);
     }
+
+    &.warning {
+        background: var(--warning);
+        box-shadow: 0 0 0 3px rgb(242 183 5 / 12%);
+    }
 }
 
 .inline-empty {

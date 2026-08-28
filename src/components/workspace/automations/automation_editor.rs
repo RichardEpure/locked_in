@@ -4,7 +4,8 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURE_ARMED_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_SIGNAL,
-    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, cancel_capture, config::Automation,
+    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, automation_runtime::AutomationRuntime,
+    cancel_capture, config::Automation,
 };
 
 use super::{
@@ -25,6 +26,7 @@ pub(super) struct AutomationEditorProps {
 
 #[component]
 pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
+    let runtime = consume_context::<AutomationRuntime>();
     let id = props.id.clone();
     let mut selected = props.selected;
     let mut pending_delete = props.pending_delete;
@@ -130,6 +132,8 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     let cancel_original = original.clone();
     let cancel_id = id.clone();
     let cancel_token = editor_token.clone();
+    let delete_runtime = runtime.clone();
+    let save_runtime = runtime.clone();
 
     rsx! {
         header {
@@ -166,7 +170,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                                 let mut next = CONFIG_SIGNAL.read().clone();
                                 next.automations.retain(|item| item.id != id);
                                 match next.save() {
-                                    Ok(()) => { *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; pending_delete.set(None); selected.set(None); }
+                                    Ok(()) => { delete_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; pending_delete.set(None); selected.set(None); }
                                     Err(error) => message.set(Some((false, format!("Delete failed: {error}")))),
                                 }
                             } else {
@@ -242,6 +246,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                         if errors.is_empty() {
                             match next.save() {
                                 Ok(()) => {
+                                    save_runtime.replace_config(next.clone());
                                     *CONFIG_SIGNAL.write() = next;
                                     *UNSAVED_ENTITY_SIGNAL.write() = None;
                                     *DIRTY_EDITOR_SIGNAL.write() = None;

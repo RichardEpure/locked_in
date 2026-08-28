@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::config::Device;
+use crate::automation_runtime::ReportDispatcher;
 use anyhow::{Context, Result};
 use hidapi::{DeviceInfo, HidApi};
 
@@ -169,6 +170,18 @@ pub fn initialize_device_cache() -> Result<()> {
             *initialization = CacheInitialization::Failed(message.clone());
             Err(anyhow::anyhow!(message))
         }
+    }
+}
+
+pub(crate) struct SystemReportDispatcher;
+
+impl ReportDispatcher for SystemReportDispatcher {
+    fn initialize(&mut self) -> Result<()> {
+        initialize_device_cache()
+    }
+
+    fn send_report(&mut self, device: &Device, report: &[u8]) -> Result<usize> {
+        device.send_report(report)
     }
 }
 

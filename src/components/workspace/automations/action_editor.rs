@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     CONFIG_SIGNAL,
+    automation_runtime::AutomationRuntime,
     config::{Automation, SendAction},
     hid,
 };
@@ -21,10 +22,12 @@ pub(super) struct ActionEditorProps {
 
 #[component]
 pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
+    let runtime = consume_context::<AutomationRuntime>();
     let mut draft = props.draft;
     let action = props.action;
     let devices = CONFIG_SIGNAL.read().devices.clone();
     let mut test_result = use_signal(|| None::<(bool, String)>);
+    let mut test_in_flight = use_signal(|| false);
     let mut report_input = use_signal(|| hex::encode(&action.report));
     let report_text = report_input();
     let parsed_report = parse_report_hex(&report_text);
@@ -45,7 +48,7 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
         div { class: "action-card",
             div { class: "action-card__top",
                 input { class: "action-label", placeholder: "Optional action label", value: "{action.label}", oninput: move |event| with_action_mut(&mut draft, props.case_index, props.action_index, |action| action.label = event.value()) }
-                button { class: "button secondary small", onclick: {
+                button { class: "button secondary small", disabled: test_in_flight(), onclick: {
                     let mut action = action.clone();
                     move |_| {
                         let Ok(report) = parse_report_hex(&report_input()) else {
@@ -59,15 +62,21 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                             test_result.set(Some((false, validation_errors.iter().map(|error| error.message.as_str()).collect::<Vec<_>>().join("; "))));
                             return;
                         }
-                        let mut failures = Vec::new();
-                        let mut sent = 0;
-                        for device_id in &action.device_ids {
-                            if let Some(device) = config.devices.iter().find(|device| device.id == *device_id) {
-                                match device.send_report(&action.report) { Ok(_) => sent += 1, Err(error) => failures.push(format!("{}: {error}", device.name)) }
-                            }
-                        }
-                        if failures.is_empty() && sent > 0 { test_result.set(Some((true, format!("Sent to {sent} device(s)")))); }
-                        else { test_result.set(Some((false, if failures.is_empty() { "Select a destination".into() } else { failures.join("; ") }))); }
+                        let devices = action.device_ids.iter().filter_map(|device_id| config.devices.iter().find(|device| device.id == *device_id).cloned()).collect();
+                        drop(config);
+                        test_in_flight.set(true);
+                        let runtime = runtime.clone();
+                        let action = action.clone();
+                        spawn(async move {
+                            let feedback = match runtime.test_action(action, devices).await {
+                                Ok(result) if result.failures.is_empty() && result.sent > 0 => (true, format!("Sent to {} device(s)", result.sent)),
+                                Ok(result) if result.failures.is_empty() => (false, "Select a destination".into()),
+                                Ok(result) => (false, result.failures.join("; ")),
+                                Err(error) => (false, error.to_string()),
+                            };
+                            test_result.set(Some(feedback));
+                            test_in_flight.set(false);
+                        });
                     }
                 }, "Test" }
                 button { class: "icon-button danger", title: "Remove action", onclick: move |_| remove_action(&mut draft, props.case_index, props.action_index), "×" }

@@ -1,5 +1,6 @@
 use dioxus::{
     desktop::{
+        WindowCloseBehaviour,
         trayicon::{
             Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
             menu::{Menu, MenuItem},
@@ -10,7 +11,7 @@ use dioxus::{
 };
 
 use crate::{
-    CONFIG_SIGNAL, FOCUSED_WINDOW_SIGNAL, HID_CACHE_REVISION_SIGNAL, app_log, arm_capture, hid, win,
+    FOCUSED_WINDOW_SIGNAL, app_log, arm_capture, automation_runtime::AutomationRuntime, win,
 };
 
 use super::{capture_shortcut::CaptureShortcut, workspace::Workspace};
@@ -21,6 +22,7 @@ const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
 #[component]
 pub(crate) fn App() -> Element {
     let window = use_window();
+    let runtime = consume_context::<AutomationRuntime>();
     let menu = Menu::new();
     let open_item = MenuItem::with_id("open", "Open Locked In", true, None);
     let capture_item = MenuItem::with_id("capture", "Capture focused window (F3)", true, None);
@@ -47,8 +49,13 @@ pub(crate) fn App() -> Element {
 
     use_muda_event_handler({
         let window = window.clone();
+        let runtime = runtime.clone();
         move |event| match event.id.0.as_str() {
-            "quit" => std::process::exit(0),
+            "quit" => {
+                runtime.request_shutdown();
+                window.set_close_behavior(WindowCloseBehaviour::WindowCloses);
+                window.close();
+            }
             "open" => {
                 window.set_visible(true);
                 window.set_minimized(false);
@@ -84,36 +91,9 @@ pub(crate) fn App() -> Element {
     });
 
     use_future(move || async move {
-        match tokio::task::spawn_blocking(hid::initialize_device_cache).await {
-            Ok(Ok(())) => *HID_CACHE_REVISION_SIGNAL.write() += 1,
-            Ok(Err(error)) => app_log::write_error(format!("HID discovery failed: {error:#}")),
-            Err(error) => app_log::write_error(format!("HID discovery task failed: {error}")),
-        }
-    });
-
-    use_future(move || async move {
-        let mut receiver = win::FOCUSED_WINDOW_TX.subscribe();
+        let mut receiver = win::subscribe_focused_window();
         while receiver.changed().await.is_ok() {
-            let focused = receiver.borrow().clone();
-            *FOCUSED_WINDOW_SIGNAL.write() = focused.clone();
-            let config = CONFIG_SIGNAL.read();
-            for evaluated in config.evaluate_window(&focused) {
-                for device in evaluated.devices {
-                    match device.send_report(&evaluated.action.report) {
-                        Ok(_) => app_log::write(format!(
-                            "{} / {} sent {} bytes to {}",
-                            evaluated.automation_name,
-                            evaluated.case_name,
-                            evaluated.action.report.len(),
-                            device.name
-                        )),
-                        Err(error) => app_log::write_error(format!(
-                            "{} / {} failed for {}: {error:#}",
-                            evaluated.automation_name, evaluated.case_name, device.name
-                        )),
-                    }
-                }
-            }
+            *FOCUSED_WINDOW_SIGNAL.write() = receiver.borrow_and_update().clone();
         }
     });
 
