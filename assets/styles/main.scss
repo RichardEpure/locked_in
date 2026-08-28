@@ -98,6 +98,10 @@ small {
     overflow: hidden;
 }
 
+.app-shell:focus {
+    outline: none;
+}
+
 .load-error {
     display: grid;
     width: min(720px, calc(100vw - 60px));
