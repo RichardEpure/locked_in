@@ -13,9 +13,24 @@
     }
 
     .brand > span:last-child,
-    .nav-item__label,
-    .app-nav__status {
+    .nav-item__label {
         display: none;
+    }
+
+    .app-nav__status {
+        width: 40px;
+        justify-content: center;
+        padding-inline: 0;
+    }
+
+    .app-nav__status-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        clip-path: inset(50%);
     }
 
     .nav-item {

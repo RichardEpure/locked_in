@@ -2,37 +2,46 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use tokio::sync::{mpsc, watch};
 
-use super::{AutomationRuntime, ReportDispatcher, RuntimeCommand, TestDispatchResult};
-use crate::{app_log, win::WindowMetadata};
+use super::{AutomationRuntime, RuntimeCommand, TestDispatchResult};
+use crate::{
+    app_log,
+    config::{Device, SendAction},
+    hid::{HidBackend, HidError, HidInventory, HidRefreshState},
+    win::WindowMetadata,
+};
 
 pub(super) fn run(
     runtime: AutomationRuntime,
     focus_events: watch::Receiver<WindowMetadata>,
     commands: mpsc::UnboundedReceiver<RuntimeCommand>,
-    dispatcher: Box<dyn ReportDispatcher>,
+    backend: Box<dyn HidBackend>,
 ) {
     let panic_runtime = runtime.clone();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .map_err(|error| format!("automation executor could not start: {error}"))?;
-        tokio_runtime.block_on(run_loop(runtime, focus_events, commands, dispatcher));
+        tokio_runtime.block_on(run_loop(runtime, focus_events, commands, backend));
         Ok::<(), String>(())
     }));
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             app_log::write_error(&error);
+            panic_runtime.close_admission();
             panic_runtime.update_health(|health| {
                 health.worker_error = Some(error);
                 health.started = true;
+                health.stopping = false;
             });
         }
         Err(_) => {
             app_log::write_error("automation runtime panicked");
+            panic_runtime.close_admission();
             panic_runtime.update_health(|health| {
                 health.worker_error = Some("automation runtime panicked".to_string());
                 health.started = true;
+                health.stopping = false;
             });
         }
     }
@@ -42,22 +51,9 @@ async fn run_loop(
     runtime: AutomationRuntime,
     mut focus_events: watch::Receiver<WindowMetadata>,
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
-    mut dispatcher: Box<dyn ReportDispatcher>,
+    mut backend: Box<dyn HidBackend>,
 ) {
-    match dispatcher.initialize() {
-        Ok(()) => runtime.update_health(|health| {
-            health.hid_error = None;
-            health.started = true;
-        }),
-        Err(error) => {
-            let message = format!("HID discovery failed: {error:#}");
-            app_log::write_error(&message);
-            runtime.update_health(|health| {
-                health.hid_error = Some(message);
-                health.started = true;
-            });
-        }
-    }
+    refresh_hid(&runtime, backend.as_mut(), true);
 
     let mut focus_open = true;
     loop {
@@ -66,8 +62,11 @@ async fn run_loop(
             command = commands.recv() => {
                 match command {
                     Some(RuntimeCommand::TestAction { action, devices, response }) => {
-                        let result = dispatch_test(&runtime, dispatcher.as_mut(), &action, &devices);
+                        let result = dispatch_test(&runtime, backend.as_mut(), &action, &devices);
                         let _ = response.send(result);
+                    }
+                    Some(RuntimeCommand::RefreshHid) => {
+                        refresh_hid(&runtime, backend.as_mut(), false);
                     }
                     Some(RuntimeCommand::Shutdown) | None => break,
                 }
@@ -81,7 +80,7 @@ async fn run_loop(
                     continue;
                 }
                 let focused = focus_events.borrow_and_update().clone();
-                dispatch_focus(&runtime, dispatcher.as_mut(), &focused);
+                dispatch_focus(&runtime, backend.as_mut(), &focused);
             }
         }
     }
@@ -92,9 +91,50 @@ async fn run_loop(
     });
 }
 
+fn refresh_hid(runtime: &AutomationRuntime, backend: &mut dyn HidBackend, startup: bool) {
+    let mut refreshing = backend.inventory();
+    refreshing.refresh_state = HidRefreshState::Refreshing;
+    runtime.publish_hid_inventory(refreshing);
+
+    let inventory = backend.refresh();
+    runtime.publish_completed_hid_refresh(inventory.clone());
+    update_refresh_health(runtime, &inventory);
+    if startup {
+        runtime.update_health(|health| health.started = true);
+    }
+}
+
+fn update_refresh_health(runtime: &AutomationRuntime, inventory: &HidInventory) {
+    let error = match &inventory.refresh_state {
+        HidRefreshState::Ready => None,
+        HidRefreshState::Failed { error } => Some(format!("HID discovery failed: {error}")),
+        HidRefreshState::NotAttempted | HidRefreshState::Refreshing => {
+            Some("HID discovery did not complete".to_string())
+        }
+    };
+    if let Some(error) = &error {
+        app_log::write_error(error);
+    }
+    runtime.update_health(|health| health.refresh_error = error);
+}
+
+fn send_report(
+    runtime: &AutomationRuntime,
+    backend: &mut dyn HidBackend,
+    device: &Device,
+    report: &[u8],
+) -> Result<(), HidError> {
+    let result = backend.send_report(device, report);
+    let inventory = backend.inventory();
+    if runtime.publish_hid_inventory_if_changed(inventory.clone()) {
+        update_refresh_health(runtime, &inventory);
+    }
+    result
+}
+
 fn dispatch_focus(
     runtime: &AutomationRuntime,
-    dispatcher: &mut dyn ReportDispatcher,
+    backend: &mut dyn HidBackend,
     focused: &WindowMetadata,
 ) {
     let Some(config) = runtime.config_snapshot() else {
@@ -105,8 +145,8 @@ fn dispatch_focus(
     for evaluated in config.evaluate_window(focused) {
         for device in evaluated.devices {
             attempted = true;
-            match dispatcher.send_report(device, &evaluated.action.report) {
-                Ok(_) => app_log::write(format!(
+            match send_report(runtime, backend, device, &evaluated.action.report) {
+                Ok(()) => app_log::write(format!(
                     "{} / {} sent {} bytes to {}",
                     evaluated.automation_name,
                     evaluated.case_name,
@@ -124,22 +164,22 @@ fn dispatch_focus(
             }
         }
     }
-    update_hid_health(runtime, attempted, last_error);
+    update_dispatch_health(runtime, attempted, last_error);
 }
 
 fn dispatch_test(
     runtime: &AutomationRuntime,
-    dispatcher: &mut dyn ReportDispatcher,
-    action: &crate::config::SendAction,
-    devices: &[crate::config::Device],
+    backend: &mut dyn HidBackend,
+    action: &SendAction,
+    devices: &[Device],
 ) -> TestDispatchResult {
     let mut result = TestDispatchResult {
         sent: 0,
         failures: Vec::new(),
     };
     for device in devices {
-        match dispatcher.send_report(device, &action.report) {
-            Ok(_) => result.sent += 1,
+        match send_report(runtime, backend, device, &action.report) {
+            Ok(()) => result.sent += 1,
             Err(error) => result.failures.push(format!("{}: {error}", device.name)),
         }
     }
@@ -147,12 +187,12 @@ fn dispatch_test(
         .failures
         .last()
         .map(|error| format!("HID report failed: {error}"));
-    update_hid_health(runtime, !devices.is_empty(), last_error);
+    update_dispatch_health(runtime, !devices.is_empty(), last_error);
     result
 }
 
-fn update_hid_health(runtime: &AutomationRuntime, attempted: bool, error: Option<String>) {
+fn update_dispatch_health(runtime: &AutomationRuntime, attempted: bool, error: Option<String>) {
     if attempted {
-        runtime.update_health(|health| health.hid_error = error);
+        runtime.update_health(|health| health.dispatch_error = error);
     }
 }

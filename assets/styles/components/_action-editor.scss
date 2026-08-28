@@ -92,6 +92,11 @@
         color: var(--text-muted);
         font-size: 0.8rem;
     }
+
+    .presence-label {
+        padding-left: 2px;
+        border-left: 1px solid var(--border);
+    }
 }
 
 .muted-copy {

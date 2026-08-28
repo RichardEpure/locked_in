@@ -21,6 +21,26 @@
         background: var(--warning);
         box-shadow: 0 0 0 3px rgb(242 183 5 / 12%);
     }
+
+    &.disconnected {
+        background: var(--danger);
+        box-shadow: 0 0 0 3px rgb(255 114 127 / 10%);
+    }
+
+    &.unknown {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px rgb(97 168 255 / 12%);
+    }
+}
+
+.presence-label {
+    font-weight: 650;
+
+    &.compact {
+        color: var(--text-faint);
+        font-size: 0.7rem;
+        font-weight: 550;
+    }
 }
 
 .inline-empty {

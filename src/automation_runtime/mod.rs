@@ -1,7 +1,9 @@
 mod worker;
 
 use std::{
-    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
+    error::Error,
+    fmt::{self, Display, Formatter},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
@@ -10,13 +12,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
     config::{Config, Device, SendAction},
+    hid::{HidBackend, HidInventory},
     win::WindowMetadata,
 };
-
-pub(crate) trait ReportDispatcher: Send + 'static {
-    fn initialize(&mut self) -> Result<()>;
-    fn send_report(&mut self, device: &Device, report: &[u8]) -> Result<usize>;
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FocusSourceState {
@@ -57,7 +55,8 @@ pub(crate) struct TestDispatchResult {
 
 struct RuntimeHealth {
     focus_error: Option<String>,
-    hid_error: Option<String>,
+    refresh_error: Option<String>,
+    dispatch_error: Option<String>,
     worker_error: Option<String>,
     has_config: bool,
     started: bool,
@@ -99,10 +98,16 @@ impl RuntimeHealth {
                 detail: Some(unavailable.join("; ")),
             };
         }
-        if let Some(error) = &self.hid_error {
+        let degraded = self
+            .refresh_error
+            .iter()
+            .chain(&self.dispatch_error)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !degraded.is_empty() {
             return RuntimeStatus {
                 phase: RuntimePhase::Degraded,
-                detail: Some(error.clone()),
+                detail: Some(degraded.join("; ")),
             };
         }
         RuntimeStatus {
@@ -112,12 +117,18 @@ impl RuntimeHealth {
     }
 }
 
+struct Admission {
+    refresh_pending: bool,
+    shutdown_requested: bool,
+}
+
 struct Shared {
     config: RwLock<Option<Arc<Config>>>,
     health: Mutex<RuntimeHealth>,
     status: watch::Sender<RuntimeStatus>,
+    hid_inventory: watch::Sender<Arc<HidInventory>>,
     commands: mpsc::UnboundedSender<RuntimeCommand>,
-    shutdown_requested: AtomicBool,
+    admission: Mutex<Admission>,
 }
 
 enum RuntimeCommand {
@@ -126,8 +137,26 @@ enum RuntimeCommand {
         devices: Vec<Device>,
         response: oneshot::Sender<TestDispatchResult>,
     },
+    RefreshHid,
     Shutdown,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HidRefreshRequestResult {
+    Queued,
+    AlreadyPending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeUnavailable;
+
+impl Display for RuntimeUnavailable {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("automation runtime is stopping or unavailable")
+    }
+}
+
+impl Error for RuntimeUnavailable {}
 
 #[derive(Clone)]
 pub(crate) struct AutomationRuntime {
@@ -139,10 +168,11 @@ impl AutomationRuntime {
         initial_config: Option<Config>,
         focus_events: watch::Receiver<WindowMetadata>,
         focus_source: FocusSourceState,
-        dispatcher: impl ReportDispatcher,
+        backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (status, _) = watch::channel(RuntimeStatus::starting());
+        let (hid_inventory, _) = watch::channel(Arc::new(HidInventory::default()));
         let (completed, completion_rx) = std::sync::mpsc::channel();
         let focus_error = match focus_source {
             FocusSourceState::Available => None,
@@ -153,7 +183,8 @@ impl AutomationRuntime {
             config: RwLock::new(initial_config.map(Arc::new)),
             health: Mutex::new(RuntimeHealth {
                 focus_error,
-                hid_error: None,
+                refresh_error: None,
+                dispatch_error: None,
                 worker_error: None,
                 has_config,
                 started: false,
@@ -161,20 +192,19 @@ impl AutomationRuntime {
                 stopped: false,
             }),
             status,
+            hid_inventory,
             commands,
-            shutdown_requested: AtomicBool::new(false),
+            admission: Mutex::new(Admission {
+                refresh_pending: true,
+                shutdown_requested: false,
+            }),
         });
         let runtime = Self { shared };
         let worker_runtime = runtime.clone();
         let worker = std::thread::Builder::new()
             .name("locked-in-automation".to_string())
             .spawn(move || {
-                worker::run(
-                    worker_runtime,
-                    focus_events,
-                    command_rx,
-                    Box::new(dispatcher),
-                );
+                worker::run(worker_runtime, focus_events, command_rx, Box::new(backend));
                 let _ = completed.send(());
             })?;
         let owner = RuntimeOwner {
@@ -203,40 +233,82 @@ impl AutomationRuntime {
         self.shared.status.subscribe()
     }
 
+    #[cfg(test)]
+    pub fn hid_inventory(&self) -> Arc<HidInventory> {
+        self.shared.hid_inventory.borrow().clone()
+    }
+
+    pub fn subscribe_hid_inventory(&self) -> watch::Receiver<Arc<HidInventory>> {
+        self.shared.hid_inventory.subscribe()
+    }
+
     pub async fn test_action(
         &self,
         action: SendAction,
         devices: Vec<Device>,
     ) -> Result<TestDispatchResult> {
-        if self
-            .shared
-            .shutdown_requested
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            anyhow::bail!("automation runtime is stopping");
-        }
         let (response, receiver) = oneshot::channel();
-        self.shared
-            .commands
-            .send(RuntimeCommand::TestAction {
-                action,
-                devices,
-                response,
-            })
-            .map_err(|_| anyhow::anyhow!("automation runtime is unavailable"))?;
+        {
+            let admission = self
+                .shared
+                .admission
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if admission.shutdown_requested {
+                return Err(RuntimeUnavailable.into());
+            }
+            self.shared
+                .commands
+                .send(RuntimeCommand::TestAction {
+                    action,
+                    devices,
+                    response,
+                })
+                .map_err(|_| RuntimeUnavailable)?;
+        }
         receiver
             .await
             .map_err(|_| anyhow::anyhow!("automation runtime stopped before the test completed"))
     }
 
-    pub fn request_shutdown(&self) {
+    pub fn request_hid_refresh(
+        &self,
+    ) -> std::result::Result<HidRefreshRequestResult, RuntimeUnavailable> {
+        let mut admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if admission.shutdown_requested {
+            return Err(RuntimeUnavailable);
+        }
+        if admission.refresh_pending {
+            return Ok(HidRefreshRequestResult::AlreadyPending);
+        }
+
+        admission.refresh_pending = true;
         if self
             .shared
-            .shutdown_requested
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
+            .commands
+            .send(RuntimeCommand::RefreshHid)
+            .is_err()
         {
+            admission.refresh_pending = false;
+            return Err(RuntimeUnavailable);
+        }
+        Ok(HidRefreshRequestResult::Queued)
+    }
+
+    pub fn request_shutdown(&self) {
+        let mut admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if admission.shutdown_requested {
             return;
         }
+        admission.shutdown_requested = true;
         self.update_health(|health| health.stopping = true);
         let _ = self.shared.commands.send(RuntimeCommand::Shutdown);
     }
@@ -260,6 +332,38 @@ impl AutomationRuntime {
             health.status()
         };
         self.shared.status.send_replace(status);
+    }
+
+    fn publish_hid_inventory(&self, inventory: HidInventory) {
+        self.shared.hid_inventory.send_replace(Arc::new(inventory));
+    }
+
+    fn publish_hid_inventory_if_changed(&self, inventory: HidInventory) -> bool {
+        let changed = self.shared.hid_inventory.borrow().as_ref() != &inventory;
+        if changed {
+            self.publish_hid_inventory(inventory);
+        }
+        changed
+    }
+
+    fn publish_completed_hid_refresh(&self, inventory: HidInventory) {
+        let mut admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.publish_hid_inventory(inventory);
+        admission.refresh_pending = false;
+    }
+
+    fn close_admission(&self) {
+        let mut admission = self
+            .shared
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        admission.refresh_pending = false;
+        admission.shutdown_requested = true;
     }
 }
 

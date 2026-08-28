@@ -17,3 +17,15 @@
 .references p {
     overflow-wrap: anywhere;
 }
+
+.device-presence {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: center;
+
+    strong {
+        color: var(--text);
+        font-size: inherit;
+    }
+}

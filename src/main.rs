@@ -20,7 +20,6 @@ pub static CAPTURE_ARMED_SIGNAL: GlobalSignal<bool> = Signal::global(|| false);
 pub static CAPTURE_GENERATION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static CAPTURE_TARGET_SIGNAL: GlobalSignal<Option<CaptureTarget>> = Signal::global(|| None);
 pub static CONFIG_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
-pub static HID_CACHE_REVISION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 pub static UNSAVED_ENTITY_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 
@@ -143,7 +142,7 @@ fn main() {
         CONFIG_BOOTSTRAP.active.clone(),
         focus_events,
         focus_source,
-        hid::SystemReportDispatcher,
+        hid::SystemHidBackend::new(),
     ) {
         Ok(runtime) => runtime,
         Err(error) => {

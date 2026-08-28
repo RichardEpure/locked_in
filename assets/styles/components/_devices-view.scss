@@ -98,13 +98,58 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 5px;
-    cursor: pointer;
+    cursor: default;
+
+    &.stale {
+        color: var(--text-muted);
+        border-style: dashed;
+    }
 
     strong {
         font-size: 0.9rem;
     }
 
-    &:hover {
+    &:not(.unavailable):hover {
         border-color: var(--accent);
+    }
+
+    &__footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 5px;
+    }
+
+    &__state,
+    &__unavailable,
+    &__aliases {
+        color: var(--text-muted);
+        font-size: 0.7rem;
+    }
+
+    &__state.success {
+        color: var(--success);
+    }
+
+    &__state.warning {
+        color: var(--warning);
+    }
+
+    &__state.error {
+        color: var(--danger);
+    }
+
+    &__unavailable,
+    &__aliases {
+        margin-left: auto;
+    }
+
+    .button.small {
+        min-height: 26px;
+        margin-left: auto;
+        padding: 3px 7px;
+        font-size: 0.7rem;
     }
 }

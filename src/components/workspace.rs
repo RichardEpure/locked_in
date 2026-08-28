@@ -4,7 +4,6 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR, DIRTY_EDITOR_SIGNAL,
-    HID_CACHE_REVISION_SIGNAL,
     automation_runtime::{AutomationRuntime, RuntimePhase},
     config,
 };
@@ -18,6 +17,7 @@ mod automations;
 mod capture_dialog;
 mod devices;
 mod empty_state;
+mod hid_inventory;
 mod selection;
 mod settings_view;
 
@@ -49,11 +49,23 @@ pub(super) fn Workspace() -> Element {
     let status_receiver = runtime.subscribe_status();
     let initial_status = status_receiver.borrow().clone();
     let mut runtime_status = use_signal(move || initial_status);
+    let inventory_receiver = runtime.subscribe_hid_inventory();
+    let initial_inventory = inventory_receiver.borrow().clone();
+    let mut hid_inventory = use_signal(move || initial_inventory);
+    use_context_provider(move || hid_inventory::HidInventoryContext::new(hid_inventory));
     use_future(move || {
         let mut receiver = status_receiver.clone();
         async move {
             while receiver.changed().await.is_ok() {
                 runtime_status.set(receiver.borrow_and_update().clone());
+            }
+        }
+    });
+    use_future(move || {
+        let mut receiver = inventory_receiver.clone();
+        async move {
+            while receiver.changed().await.is_ok() {
+                hid_inventory.set(receiver.borrow_and_update().clone());
             }
         }
     });
@@ -67,7 +79,11 @@ pub(super) fn Workspace() -> Element {
         RuntimePhase::Stopped => ("status-dot error", "Automation stopped"),
     };
     let status_detail = status.detail.unwrap_or_default();
-    let _hid_cache_revision = *HID_CACHE_REVISION_SIGNAL.read();
+    let status_tooltip = if status_detail.is_empty() {
+        status_text.to_string()
+    } else {
+        format!("{status_text}: {status_detail}")
+    };
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
 
@@ -119,7 +135,14 @@ pub(super) fn Workspace() -> Element {
                     span { class: "nav-item__icon", "S" }
                     span { class: "nav-item__label", "Settings" }
                 }
-                div { class: "app-nav__status", title: "{status_detail}", span { class: status_class } "{status_text}" }
+                div {
+                    class: "app-nav__status",
+                    role: "status",
+                    aria_label: status_text,
+                    title: "{status_tooltip}",
+                    span { class: status_class }
+                    span { class: "app-nav__status-label", "{status_text}" }
+                }
             }
             match section() {
                 Section::Automations => rsx! { AutomationsView { selected: selected_automation } },

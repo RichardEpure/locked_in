@@ -2,10 +2,11 @@ use dioxus::prelude::*;
 
 use crate::{
     CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
-    automation_runtime::AutomationRuntime, hid,
+    automation_runtime::AutomationRuntime, hid::HidPresence,
 };
 
 use super::numeric_field::NumericField;
+use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct EntityIdProps {
@@ -16,6 +17,7 @@ pub(super) struct EntityIdProps {
 #[component]
 pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
     let runtime = consume_context::<AutomationRuntime>();
+    let inventory = consume_context::<HidInventoryContext>().current();
     let mut selected = props.selected;
     let delete_id = props.id.clone();
     let save_id = props.id.clone();
@@ -33,6 +35,14 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
     let editor_token = format!("device:{}", props.id);
     let is_new = UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(editor_token.as_str());
     let dirty = snapshot != original || is_new;
+    let device_presence = inventory.presence(&snapshot);
+    let presence = hid_presence_view(device_presence);
+    let presence_copy = match device_presence {
+        HidPresence::Connected => "One matching interface was found in the latest refresh",
+        HidPresence::Disconnected => "Waiting for a matching interface",
+        HidPresence::Ambiguous { .. } => "Dispatch is unavailable until only one match remains",
+        HidPresence::Unknown => "Availability cannot be confirmed during refresh or after failure",
+    };
     let cancel_original = original.clone();
     let cancel_id = props.id.clone();
     let cancel_token = editor_token.clone();
@@ -72,7 +82,13 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
     let delete_runtime = runtime.clone();
     let save_runtime = runtime.clone();
     rsx! {
-        header { class: "workspace-header", div { div { class: "eyebrow", "HID DESTINATION" } h2 { "{snapshot.name}" } p { if hid::is_connected(&snapshot) { "Connected and available" } else { "Saved offline · waiting for matching interface" } } }
+        header { class: "workspace-header", div { div { class: "eyebrow", "HID DESTINATION" } h2 { "{snapshot.name}" }
+                p { class: "device-presence", title: "{presence.title}",
+                    span { class: presence.status_class, aria_hidden: true }
+                    strong { "{presence.label}" }
+                    " · {presence_copy}"
+                }
+            }
             button { class: "button danger-ghost", onclick: move |_| {
                 if !delete_references.is_empty() {
                     message.set(Some((false, format!("Used by: {delete_references_text}"))));

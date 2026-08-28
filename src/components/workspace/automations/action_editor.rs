@@ -2,15 +2,15 @@ use dioxus::prelude::*;
 
 use crate::{
     CONFIG_SIGNAL,
-    automation_runtime::AutomationRuntime,
+    automation_runtime::{AutomationRuntime, TestDispatchResult},
     config::{Automation, SendAction},
-    hid,
 };
 
 use super::{
     INVALID_REPORT_IDS,
     mutations::{remove_action, with_action_mut},
 };
+use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct ActionEditorProps {
@@ -23,9 +23,18 @@ pub(super) struct ActionEditorProps {
 #[component]
 pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     let runtime = consume_context::<AutomationRuntime>();
+    let inventory = consume_context::<HidInventoryContext>().current();
     let mut draft = props.draft;
     let action = props.action;
     let devices = CONFIG_SIGNAL.read().devices.clone();
+    let devices_with_presence = devices
+        .iter()
+        .cloned()
+        .map(|device| {
+            let presence = hid_presence_view(inventory.presence(&device));
+            (device, presence)
+        })
+        .collect::<Vec<_>>();
     let mut test_result = use_signal(|| None::<(bool, String)>);
     let mut test_in_flight = use_signal(|| false);
     let mut report_input = use_signal(|| hex::encode(&action.report));
@@ -69,9 +78,7 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                         let action = action.clone();
                         spawn(async move {
                             let feedback = match runtime.test_action(action, devices).await {
-                                Ok(result) if result.failures.is_empty() && result.sent > 0 => (true, format!("Sent to {} device(s)", result.sent)),
-                                Ok(result) if result.failures.is_empty() => (false, "Select a destination".into()),
-                                Ok(result) => (false, result.failures.join("; ")),
+                                Ok(result) => test_feedback(result),
                                 Err(error) => (false, error.to_string()),
                             };
                             test_result.set(Some(feedback));
@@ -88,9 +95,9 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                     if let Ok(bytes) = parse_report_hex(&value) { with_action_mut(&mut draft, props.case_index, props.action_index, |action| action.report = bytes); }
                 } } small { if parsed_report.is_ok() { "{report_length} bytes" } else { "invalid" } } } }
                 div { class: "destinations", span { class: "field-label", "Destinations" }
-                    if devices.is_empty() { small { class: "muted-copy", "Add a device first" } }
-                    for device in devices {
-                        label { class: "destination-chip",
+                    if devices_with_presence.is_empty() { small { class: "muted-copy", "Add a device first" } }
+                    for (device, presence) in devices_with_presence {
+                        label { class: "destination-chip", title: "{presence.title}",
                             input { type: "checkbox", checked: action.device_ids.contains(&device.id), onchange: {
                                 let id = device.id.clone();
                                 move |event| {
@@ -100,8 +107,9 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                                     });
                                 }
                             } }
-                            span { class: if hid::is_connected(&device) { "status-dot online" } else { "status-dot" } }
+                            span { class: presence.status_class, aria_hidden: true }
                             "{device.name}"
+                            span { class: "presence-label compact", "{presence.label}" }
                             small { "{device.report_length} B" }
                         }
                     }
@@ -120,3 +128,33 @@ fn parse_report_hex(value: &str) -> Result<Vec<u8>, hex::FromHexError> {
             .collect::<String>(),
     )
 }
+
+fn test_feedback(result: TestDispatchResult) -> (bool, String) {
+    if result.failures.is_empty() && result.sent > 0 {
+        return (
+            true,
+            format!(
+                "Sent to {} device{}",
+                result.sent,
+                if result.sent == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    if result.failures.is_empty() {
+        return (false, "Select a destination".into());
+    }
+
+    (
+        false,
+        format!(
+            "Sent to {} device{}; {} failed: {}",
+            result.sent,
+            if result.sent == 1 { "" } else { "s" },
+            result.failures.len(),
+            result.failures.join("; ")
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests;
