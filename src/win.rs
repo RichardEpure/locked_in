@@ -1,11 +1,12 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
     os::windows::ffi::OsStringExt,
     path::PathBuf,
     sync::{LazyLock, Mutex},
 };
+
+pub use crate::focused_window::FocusedWindow as WindowMetadata;
 use tokio::sync::watch;
 use windows::{
     Win32::{
@@ -36,13 +37,6 @@ pub static FOCUSED_WINDOW_TX: LazyLock<watch::Sender<WindowMetadata>> = LazyLock
 
 pub fn subscribe_focused_window() -> watch::Receiver<WindowMetadata> {
     FOCUSED_WINDOW_TX.subscribe()
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct WindowMetadata {
-    pub title: Option<String>,
-    pub class: Option<String>,
-    pub exe: Option<PathBuf>,
 }
 
 pub struct WinHook {

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURED_WINDOW_SIGNAL, CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL,
-    automation_runtime::AutomationRuntime, cancel_capture,
+    automation_runtime::AutomationRuntime, cancel_capture, config,
 };
 
 use super::automations::insert_captured_matcher;
@@ -68,7 +68,7 @@ pub(super) fn CaptureDialog() -> Element {
                         if insert_captured_matcher(automation, &case_id(), exception(), &captured).is_none() {
                             message.set("Case no longer exists".into()); return;
                         }
-                        match next.save() {
+                        match config::save(&next) {
                             Ok(()) => { runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
                             Err(error) => message.set(format!("Could not save matcher: {error}")),
                         }

@@ -4,8 +4,10 @@ use dioxus::prelude::*;
 
 use crate::{
     CAPTURE_ARMED_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_SIGNAL,
-    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, automation_runtime::AutomationRuntime,
-    cancel_capture, config::Automation,
+    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
+    automation_runtime::AutomationRuntime,
+    cancel_capture,
+    config::{self, Automation},
 };
 
 use super::{
@@ -169,7 +171,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                             if pending_delete().as_deref() == Some(&id) {
                                 let mut next = CONFIG_SIGNAL.read().clone();
                                 next.automations.retain(|item| item.id != id);
-                                match next.save() {
+                                 match config::save(&next) {
                                     Ok(()) => { delete_runtime.replace_config(next.clone()); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; pending_delete.set(None); selected.set(None); }
                                     Err(error) => message.set(Some((false, format!("Delete failed: {error}")))),
                                 }
@@ -244,7 +246,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                         }
                         let errors = next.validate();
                         if errors.is_empty() {
-                            match next.save() {
+                            match config::save(&next) {
                                 Ok(()) => {
                                     save_runtime.replace_config(next.clone());
                                     *CONFIG_SIGNAL.write() = next;

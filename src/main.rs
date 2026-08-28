@@ -2,6 +2,7 @@ mod app_log;
 mod automation_runtime;
 mod components;
 mod config;
+mod focused_window;
 mod hid;
 mod win;
 
@@ -67,19 +68,18 @@ struct ConfigBootstrap {
     error: Option<String>,
 }
 
-static CONFIG_BOOTSTRAP: LazyLock<ConfigBootstrap> =
-    LazyLock::new(|| match config::Config::load() {
-        Ok(config) => ConfigBootstrap {
-            active: Some(config.clone()),
-            ui: config,
-            error: None,
-        },
-        Err(error) => ConfigBootstrap {
-            active: None,
-            ui: config::Config::default(),
-            error: Some(format!("{error:#}")),
-        },
-    });
+static CONFIG_BOOTSTRAP: LazyLock<ConfigBootstrap> = LazyLock::new(|| match config::load() {
+    Ok(config) => ConfigBootstrap {
+        active: Some(config.clone()),
+        ui: config,
+        error: None,
+    },
+    Err(error) => ConfigBootstrap {
+        active: None,
+        ui: config::Config::default(),
+        error: Some(format!("{error:#}")),
+    },
+});
 
 pub static CONFIG_SIGNAL: GlobalSignal<config::Config> =
     Signal::global(|| CONFIG_BOOTSTRAP.ui.clone());

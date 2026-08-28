@@ -46,7 +46,7 @@ pub(super) fn SettingsView() -> Element {
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "Configuration" } p { "Open the TOML file, then reload changes from disk" } } }
                     div { class: "settings-actions",
                         button { class: "button secondary", onclick: move |_| if let Ok(path) = config::config_path() { let _ = Command::new("notepad.exe").arg(path).spawn(); }, "Open config file" }
-                        button { class: "button secondary", onclick: move |_| match config::Config::load() {
+                        button { class: "button secondary", onclick: move |_| match config::load() {
                             Ok(config) => match crate::win::set_start_with_windows(config.settings.start_with_windows) {
                                 Ok(()) => {
                                     app_log::set_level(config.settings.log_level);
@@ -78,7 +78,7 @@ pub(super) fn SettingsView() -> Element {
                     if let Err(error) = crate::win::set_start_with_windows(next.settings.start_with_windows) {
                         message.set(format!("Startup setting failed: {error}"));
                     } else {
-                        match next.save() {
+                        match config::save(&next) {
                             Ok(()) => {
                                 app_log::set_level(next.settings.log_level);
                                 window.set_close_behavior(if next.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });

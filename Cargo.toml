@@ -8,7 +8,6 @@ edition = "2024"
 hidapi = "2.6.3"
 dioxus = { version = "=0.7.10", features = [] }
 # dioxus = { path = "../dioxus/packages/dioxus", features = [] }
-figment = { version = "0.10.19", features = ["toml"] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = { version = "0.9.10", features = ["serde"] }
 anyhow = "1.0.100"
