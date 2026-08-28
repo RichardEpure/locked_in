@@ -1,3 +1,6 @@
+// Runtime publication will consume this module after the coordinator cutover.
+#[allow(dead_code)]
+mod active;
 mod encoding;
 mod evaluation;
 mod model;
@@ -7,6 +10,8 @@ use std::{env, fs, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
 
+#[allow(unused_imports)]
+pub use active::{ActiveConfig, ActiveDispatch};
 #[allow(unused_imports)]
 pub use evaluation::EvaluatedAction;
 #[allow(unused_imports)]
