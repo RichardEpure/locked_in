@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use dioxus::prelude::*;
 
 use crate::{
-    CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
-    config::Device,
+    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
+    config::{Device, EditableConfig},
     hid::{HidInventoryRow, HidRefreshState, InterfaceSelector},
 };
+
+use super::draft::DeviceDraft;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SelectorAliases {
@@ -34,12 +38,15 @@ pub(super) struct DiscoveryRowProps {
     pub query: Signal<String>,
     pub discovery_open: Signal<bool>,
     pub navigation_locked: bool,
+    pub config: Arc<EditableConfig>,
+    pub revision: u64,
+    pub pending_draft: Signal<Option<DeviceDraft>>,
 }
 
 #[component]
 pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
     let row = props.row;
-    let aliases = selector_aliases(&CONFIG_SIGNAL.read().devices, row.selector);
+    let aliases = selector_aliases(&props.config.devices, row.selector);
     let available = props.refresh_state == HidRefreshState::Ready && row.match_count == 1;
     let (row_class, state_class, state_text, state_title) = match &props.refresh_state {
         HidRefreshState::Ready if row.match_count == 1 => (
@@ -102,10 +109,12 @@ pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
                                     let mut selected = props.selected;
                                     let mut query = props.query;
                                     let mut discovery_open = props.discovery_open;
+                                    let mut pending_draft = props.pending_draft;
+                                    let config = props.config.clone();
+                                    let revision = props.revision;
                                     move |_| {
-                                        let mut config = CONFIG_SIGNAL.read().clone();
                                         let id = config.next_id(&row.name);
-                                        config.devices.push(Device {
+                                        let device = Device {
                                             id: id.clone(),
                                             name: row.name.clone(),
                                             vid: row.selector.vendor_id,
@@ -114,8 +123,8 @@ pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
                                             usage: row.selector.usage,
                                             report_length: 32,
                                             report_id: 0,
-                                        });
-                                        *CONFIG_SIGNAL.write() = config;
+                                        };
+                                        pending_draft.set(Some(DeviceDraft::create(revision, device)));
                                         let token = format!("device:{id}");
                                         *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
                                         *DIRTY_EDITOR_SIGNAL.write() = Some(token);

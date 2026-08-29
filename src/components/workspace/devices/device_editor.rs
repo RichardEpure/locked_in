@@ -1,41 +1,45 @@
+use std::sync::Arc;
+
 use dioxus::prelude::*;
 
 use crate::{
-    CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
-    automation_runtime::AutomationRuntime, config, hid::HidPresence,
+    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, config::ConfigCoordinator, hid::HidPresence,
 };
 
-use super::numeric_field::NumericField;
-use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
+use super::{
+    draft::{DeviceDraft, device_references},
+    numeric_field::NumericField,
+};
+use crate::components::workspace::{
+    hid_inventory::{HidInventoryContext, hid_presence_view},
+    published_config::PublishedConfigContext,
+};
 
 #[derive(Props, Clone, PartialEq)]
-pub(super) struct EntityIdProps {
-    id: String,
+pub(super) struct DeviceEditorProps {
+    initial: DeviceDraft,
     selected: Signal<Option<String>>,
+    pending_draft: Signal<Option<DeviceDraft>>,
 }
 
 #[component]
-pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
-    let runtime = consume_context::<AutomationRuntime>();
+pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
+    let coordinator = consume_context::<Option<Arc<ConfigCoordinator>>>()
+        .expect("configuration coordinator must be available after a successful load");
+    let publication_context = consume_context::<PublishedConfigContext>();
+    let published = publication_context.current();
     let inventory = consume_context::<HidInventoryContext>().current();
     let mut selected = props.selected;
-    let delete_id = props.id.clone();
-    let save_id = props.id.clone();
-    let original = CONFIG_SIGNAL
-        .read()
-        .devices
-        .iter()
-        .find(|item| item.id == props.id)
-        .cloned()
-        .unwrap_or_default();
-    let mut draft = use_signal(|| original.clone());
+    let mut pending_draft = props.pending_draft;
+    let mut editor = use_signal(|| props.initial.clone());
     let mut message = use_signal(|| None::<(bool, String)>);
     let mut delete_confirm = use_signal(|| false);
-    let snapshot = draft();
-    let editor_token = format!("device:{}", props.id);
-    let is_new = UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(editor_token.as_str());
-    let dirty = snapshot != original || is_new;
-    let device_presence = inventory.presence(&snapshot);
+    let snapshot = editor();
+    let device = snapshot.edited.clone();
+    let editor_token = format!("device:{}", device.id);
+    let is_new = snapshot.is_new();
+    let dirty = snapshot.is_dirty();
+    let device_presence = inventory.presence(&device);
     let presence = hid_presence_view(device_presence);
     let presence_copy = match device_presence {
         HidPresence::Connected => "One matching interface was found in the latest refresh",
@@ -43,14 +47,18 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
         HidPresence::Ambiguous { .. } => "Dispatch is unavailable until only one match remains",
         HidPresence::Unknown => "Availability cannot be confirmed during refresh or after failure",
     };
-    let cancel_original = original.clone();
-    let cancel_id = props.id.clone();
-    let cancel_token = editor_token.clone();
-    let effect_token = editor_token.clone();
-    let effect_original = original.clone();
+
     use_effect(move || {
-        let pending = UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(effect_token.as_str());
-        if draft() != effect_original || pending {
+        let publication = publication_context.current();
+        let mut synchronized = editor();
+        if synchronized.refresh_if_clean(&publication) {
+            editor.set(synchronized);
+        }
+    });
+
+    let effect_token = editor_token.clone();
+    use_effect(move || {
+        if editor().is_dirty() {
             *DIRTY_EDITOR_SIGNAL.write() = Some(effect_token.clone());
         } else if DIRTY_EDITOR_SIGNAL.read().as_deref() == Some(effect_token.as_str()) {
             *DIRTY_EDITOR_SIGNAL.write() = None;
@@ -62,27 +70,14 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
             *DIRTY_EDITOR_SIGNAL.write() = None;
         }
     });
-    let references = CONFIG_SIGNAL
-        .read()
-        .automations
-        .iter()
-        .filter(|automation| {
-            automation
-                .cases
-                .iter()
-                .flat_map(|case| &case.actions)
-                .chain(&automation.otherwise_actions)
-                .any(|action| action.device_ids.contains(&props.id))
-        })
-        .map(|automation| automation.name.clone())
-        .collect::<Vec<_>>();
+
+    let references = device_references(published.editable(), &device.id);
     let references_text = references.join(", ");
     let delete_references = references.clone();
-    let delete_references_text = references_text.clone();
-    let delete_runtime = runtime.clone();
-    let save_runtime = runtime.clone();
+    let coordinator_for_delete = coordinator.clone();
+    let coordinator_for_save = coordinator.clone();
     rsx! {
-        header { class: "workspace-header", div { div { class: "eyebrow", "HID DESTINATION" } h2 { "{snapshot.name}" }
+        header { class: "workspace-header", div { div { class: "eyebrow", "HID DESTINATION" } h2 { "{device.name}" }
                 p { class: "device-presence", title: "{presence.title}",
                     span { class: presence.status_class, aria_hidden: true }
                     strong { "{presence.label}" }
@@ -91,13 +86,17 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
             }
             button { class: "button danger-ghost", onclick: move |_| {
                 if !delete_references.is_empty() {
-                    message.set(Some((false, format!("Used by: {delete_references_text}"))));
+                    message.set(Some((false, format!("Used by: {}", delete_references.join(", ")))));
                 } else if delete_confirm() {
-                    let mut next = CONFIG_SIGNAL.read().clone();
-                    next.devices.retain(|device| device.id != delete_id);
-                    match config::save(&next) {
-                        Ok(()) => { delete_runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *DIRTY_EDITOR_SIGNAL.write() = None; *UNSAVED_ENTITY_SIGNAL.write() = None; selected.set(None); }
-                        Err(error) => message.set(Some((false, format!("Delete failed: {error}")))),
+                    let state = editor();
+                    match state.delete(&coordinator_for_delete, &delete_references) {
+                        Ok(_) => {
+                            pending_draft.set(None);
+                            *DIRTY_EDITOR_SIGNAL.write() = None;
+                            *UNSAVED_ENTITY_SIGNAL.write() = None;
+                            selected.set(None);
+                        }
+                        Err(error) => message.set(Some((false, error.to_string()))),
                     }
                 } else {
                     delete_confirm.set(true);
@@ -107,16 +106,16 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
         }
         div { class: "editor-scroll",
             section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Identity" } p { "Name this device for use in report destinations" } } }
-                div { class: "form-grid two", label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().name = event.value() } } label { "Stable ID" input { value: "{snapshot.id}", disabled: true } } }
+                div { class: "form-grid two", label { "Name" input { value: "{device.name}", oninput: move |event| editor.write().edited.name = event.value() } } label { "Stable ID" input { value: "{device.id}", disabled: true } } }
             }
             section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "HID interface" } p { "Enter decimal HID identifiers and report settings" } } }
                 div { class: "form-grid three",
-                    NumericField { label: "Vendor ID", value: snapshot.vid, on_change: move |value| draft.write().vid = value }
-                    NumericField { label: "Product ID", value: snapshot.pid, on_change: move |value| draft.write().pid = value }
-                    NumericField { label: "Usage page", value: snapshot.usage_page, on_change: move |value| draft.write().usage_page = value }
-                    NumericField { label: "Usage", value: snapshot.usage, on_change: move |value| draft.write().usage = value }
-                    NumericField { label: "Report length", value: snapshot.report_length, on_change: move |value| draft.write().report_length = value }
-                    label { "Report ID" input { type: "number", min: "0", max: "255", value: "{snapshot.report_id}", oninput: move |event| if let Ok(value) = event.value().parse() { draft.write().report_id = value } } }
+                    NumericField { label: "Vendor ID", value: device.vid, on_change: move |value| editor.write().edited.vid = value }
+                    NumericField { label: "Product ID", value: device.pid, on_change: move |value| editor.write().edited.pid = value }
+                    NumericField { label: "Usage page", value: device.usage_page, on_change: move |value| editor.write().edited.usage_page = value }
+                    NumericField { label: "Usage", value: device.usage, on_change: move |value| editor.write().edited.usage = value }
+                    NumericField { label: "Report length", value: device.report_length, on_change: move |value| editor.write().edited.report_length = value }
+                    label { "Report ID" input { type: "number", min: "0", max: "255", value: "{device.report_id}", oninput: move |event| if let Ok(value) = event.value().parse() { editor.write().edited.report_id = value } } }
                 }
                 div { class: "device-note", strong { "Use a connected device" } p { "Use Connected interfaces to add or select a detected device, or enter HID values manually." } }
             }
@@ -128,21 +127,32 @@ pub(super) fn DeviceEditor(props: EntityIdProps) -> Element {
                 if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, "{text}" } }
             }
             div { class: "toolbar", button { class: "button ghost", disabled: !dirty, onclick: move |_| {
-                if UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(cancel_token.as_str()) {
-                    CONFIG_SIGNAL.write().devices.retain(|device| device.id != cancel_id);
-                    *UNSAVED_ENTITY_SIGNAL.write() = None;
-                    *DIRTY_EDITOR_SIGNAL.write() = None;
-                    selected.set(None);
+                let mut state = editor();
+                if state.cancel(&published) {
+                    editor.set(state);
                 } else {
-                    draft.set(cancel_original.clone());
+                    pending_draft.set(None);
+                    selected.set(None);
                 }
+                *UNSAVED_ENTITY_SIGNAL.write() = None;
+                *DIRTY_EDITOR_SIGNAL.write() = None;
+                message.set(None);
             }, "Cancel" }
                 button { class: "button primary", disabled: !dirty, onclick: move |_| {
-                    let mut next = CONFIG_SIGNAL.read().clone();
-                    if let Some(index) = next.devices.iter().position(|item| item.id == save_id) { next.devices[index] = draft(); }
-                    let errors = next.validate();
-                    if errors.is_empty() { match config::save(&next) { Ok(()) => { save_runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *UNSAVED_ENTITY_SIGNAL.write() = None; *DIRTY_EDITOR_SIGNAL.write() = None; message.set(Some((true, "Device saved".into()))); }, Err(error) => message.set(Some((false, error.to_string()))) } }
-                    else { message.set(Some((false, errors[0].message.clone()))); }
+                    let mut state = editor();
+                    let was_new = state.is_new();
+                    match state.save(&coordinator_for_save) {
+                        Ok(_) => {
+                            editor.set(state.clone());
+                            if was_new {
+                                pending_draft.set(Some(state));
+                            }
+                            *UNSAVED_ENTITY_SIGNAL.write() = None;
+                            *DIRTY_EDITOR_SIGNAL.write() = None;
+                            message.set(Some((true, "Device saved".into())));
+                        }
+                        Err(error) => message.set(Some((false, format!("Save failed: {error}")))),
+                    }
                 }, "Save device" }
             }
         }

@@ -18,6 +18,7 @@ mod capture_dialog;
 mod devices;
 mod empty_state;
 mod hid_inventory;
+mod published_config;
 mod selection;
 mod settings_view;
 
@@ -45,6 +46,13 @@ pub(super) fn Workspace() -> Element {
     let mut section = use_signal(|| Section::Automations);
     let selected_automation = use_signal(|| None::<String>);
     let selected_device = use_signal(|| None::<String>);
+    let publication_receiver = consume_context::<
+        Option<tokio::sync::watch::Receiver<std::sync::Arc<config::PublishedConfig>>>,
+    >()
+    .expect("configuration publication context must be available after a successful load");
+    let initial_publication = publication_receiver.borrow().clone();
+    let mut publication = use_signal(move || initial_publication);
+    use_context_provider(move || published_config::PublishedConfigContext::new(publication));
     let runtime = consume_context::<AutomationRuntime>();
     let status_receiver = runtime.subscribe_status();
     let initial_status = status_receiver.borrow().clone();
@@ -53,6 +61,14 @@ pub(super) fn Workspace() -> Element {
     let initial_inventory = inventory_receiver.borrow().clone();
     let mut hid_inventory = use_signal(move || initial_inventory);
     use_context_provider(move || hid_inventory::HidInventoryContext::new(hid_inventory));
+    use_future(move || {
+        let mut receiver = publication_receiver.clone();
+        async move {
+            while receiver.changed().await.is_ok() {
+                publication.set(receiver.borrow_and_update().clone());
+            }
+        }
+    });
     use_future(move || {
         let mut receiver = status_receiver.clone();
         async move {
