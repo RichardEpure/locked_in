@@ -103,10 +103,12 @@ pub(super) fn SettingsView() -> Element {
                 }
             }
             footer { class: "save-bar",
-                if let Some((class, text)) = message() {
-                    span { class, role: "status", aria_live: "polite", "{text}" }
-                } else if let Some(warning) = publication_warning {
-                    span { class: "message warning", role: "status", "{warning}" }
+                div { class: "save-bar__status",
+                    if let Some((class, text)) = message() {
+                        span { class, role: "status", aria_live: "polite", "{text}" }
+                    } else if let Some(warning) = publication_warning {
+                        span { class: "message warning", role: "status", "{warning}" }
+                    }
                 }
                 div { class: "toolbar",
                     button { class: "button ghost", disabled: snapshot == original, onclick: move |_| { draft.set(cancel_original.clone()); *DIRTY_EDITOR_SIGNAL.write() = None; message.set(None); }, "Cancel" }
