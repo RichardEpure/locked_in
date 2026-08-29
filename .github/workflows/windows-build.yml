@@ -35,8 +35,13 @@ jobs:
       - name: Install locked Node dependencies
         run: npm ci
 
-      - name: Install locked Dioxus CLI
-        run: cargo install dioxus-cli --version 0.7.10 --locked
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@75b4bfae1b2c753a6806bbce6e6cb89b602de33c # v1.22.0
+        with:
+          version: "1.22.0"
+
+      - name: Install pinned Dioxus CLI
+        run: cargo binstall dioxus-cli@0.7.10 --no-confirm --strategies crate-meta-data
 
       - name: Check Rust formatting
         run: cargo fmt --all --check
