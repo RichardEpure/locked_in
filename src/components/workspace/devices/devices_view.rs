@@ -1,16 +1,21 @@
 use dioxus::prelude::*;
 
 use crate::{
-    CAPTURE_TARGET_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
+    CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
     automation_runtime::AutomationRuntime,
     config::Device,
     hid::{HidInventory, HidRefreshState},
 };
 
-use super::{device_editor::DeviceEditor, discovery_row::DiscoveryRow};
+use super::{
+    device_editor::DeviceEditor,
+    discovery_row::DiscoveryRow,
+    draft::{DeviceDraft, clear_published_pending},
+};
 use crate::components::workspace::{
     empty_state::EmptyState,
     hid_inventory::{HidInventoryContext, hid_presence_view},
+    published_config::PublishedConfigContext,
     selection::SelectionProps,
 };
 
@@ -38,8 +43,11 @@ fn request_inventory_refresh(
 pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> Element {
     let runtime = consume_context::<AutomationRuntime>();
     let inventory_context = consume_context::<HidInventoryContext>();
+    let publication_context = consume_context::<PublishedConfigContext>();
+    let published = publication_context.current();
     let inventory = inventory_context.current();
     let mut selected = props.selected;
+    let mut pending_draft = use_signal(|| None::<DeviceDraft>);
     let mut query = use_signal(String::new);
     let mut discovery_open = use_signal(|| false);
     let queued_revision = use_signal(|| None::<u64>);
@@ -55,7 +63,7 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         );
     });
 
-    let devices = CONFIG_SIGNAL.read().devices.clone();
+    let devices = published.editable().devices.clone();
     let physical_count = inventory
         .rows
         .iter()
@@ -117,6 +125,15 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
     };
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
+    let create_config = published.editable().clone();
+    let create_revision = published.revision();
+    use_effect(move || {
+        let publication = publication_context.current();
+        let mut pending = pending_draft();
+        if clear_published_pending(&mut pending, &publication) {
+            pending_draft.set(pending);
+        }
+    });
     use_effect(move || {
         let selected_id = selected();
         let is_open = discovery_open();
@@ -133,10 +150,11 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         aside { class: "entity-list",
             header { div { h1 { "Devices" } p { "HID destinations for report actions" } }
                 button { class: "icon-button primary", aria_label: "New device", disabled: navigation_locked, onclick: move |_| {
-                    let mut config = CONFIG_SIGNAL.read().clone();
-                    let id = config.next_id("device");
-                    config.devices.push(Device { id: id.clone(), name: "New device".into(), report_length: 32, ..Device::default() });
-                    *CONFIG_SIGNAL.write() = config;
+                    let id = create_config.next_id("device");
+                    pending_draft.set(Some(DeviceDraft::create(
+                        create_revision,
+                        Device { id: id.clone(), name: "New device".into(), report_length: 32, ..Device::default() },
+                    )));
                     let token = format!("device:{id}");
                     *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
                     *DIRTY_EDITOR_SIGNAL.write() = Some(token);
@@ -178,6 +196,9 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
                                     query,
                                     discovery_open,
                                     navigation_locked,
+                                    config: published.editable().clone(),
+                                    revision: published.revision(),
+                                    pending_draft,
                                 }
                             }
                         }
@@ -208,8 +229,15 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
             }
         }
         section { class: "workspace",
-            if let Some(id) = selected().filter(|id| devices.iter().any(|device| device.id == *id)) { DeviceEditor { key: "{id}", id, selected } }
-            else { EmptyState { title: "Select a device", copy: "Add a connected or manual HID interface, then reuse it across report actions." } }
+            if let Some(id) = selected() {
+                if let Some(initial) = pending_draft().filter(|draft| draft.edited.id == id).or_else(|| {
+                    devices.iter().find(|device| device.id == id).cloned().map(|device| DeviceDraft::edit(published.revision(), device))
+                }) {
+                    DeviceEditor { key: "{id}", initial, selected, pending_draft }
+                } else {
+                    EmptyState { title: "Select a device", copy: "Add a connected or manual HID interface, then reuse it across report actions." }
+                }
+            } else { EmptyState { title: "Select a device", copy: "Add a connected or manual HID interface, then reuse it across report actions." } }
         }
     }
 }

@@ -1,7 +1,6 @@
 use dioxus::prelude::*;
 
 use crate::{
-    CONFIG_SIGNAL,
     automation_runtime::{AutomationRuntime, TestDispatchResult},
     config::{Automation, SendAction},
 };
@@ -10,7 +9,10 @@ use super::{
     INVALID_REPORT_IDS,
     mutations::{remove_action, with_action_mut},
 };
-use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
+use crate::components::workspace::{
+    hid_inventory::{HidInventoryContext, hid_presence_view},
+    published_config::PublishedConfigContext,
+};
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct ActionEditorProps {
@@ -24,9 +26,10 @@ pub(super) struct ActionEditorProps {
 pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     let runtime = consume_context::<AutomationRuntime>();
     let inventory = consume_context::<HidInventoryContext>().current();
+    let published = consume_context::<PublishedConfigContext>().current();
     let mut draft = props.draft;
     let action = props.action;
-    let devices = CONFIG_SIGNAL.read().devices.clone();
+    let devices = published.editable().devices.clone();
     let devices_with_presence = devices
         .iter()
         .cloned()
@@ -59,20 +62,20 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                 input { class: "action-label", placeholder: "Optional action label", value: "{action.label}", oninput: move |event| with_action_mut(&mut draft, props.case_index, props.action_index, |action| action.label = event.value()) }
                 button { class: "button secondary small", disabled: test_in_flight(), onclick: {
                     let mut action = action.clone();
+                    let published = published.clone();
                     move |_| {
                         let Ok(report) = parse_report_hex(&report_input()) else {
                             test_result.set(Some((false, "Report must contain complete hexadecimal bytes".into())));
                             return;
                         };
                         action.report = report;
-                        let config = CONFIG_SIGNAL.read();
+                        let config = published.editable();
                         let validation_errors = config.validate_action(&action);
                         if !validation_errors.is_empty() {
                             test_result.set(Some((false, validation_errors.iter().map(|error| error.message.as_str()).collect::<Vec<_>>().join("; "))));
                             return;
                         }
                         let devices = action.device_ids.iter().filter_map(|device_id| config.devices.iter().find(|device| device.id == *device_id).cloned()).collect();
-                        drop(config);
                         test_in_flight.set(true);
                         let runtime = runtime.clone();
                         let action = action.clone();
