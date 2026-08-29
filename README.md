@@ -82,7 +82,6 @@ or automation.
 # Setup
 
 - Install Rust and the platform dependencies from the [Dioxus setup guide](https://dioxuslabs.com/learn/0.7/getting_started/).
-- Install the pinned Dioxus CLI: `cargo install dioxus-cli --version 0.7.10 --locked`.
 - Clone this repository.
 - Install the locked Node dependencies: `npm ci`.
 
