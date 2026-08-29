@@ -15,7 +15,7 @@ use dioxus::{
     prelude::*,
 };
 
-pub static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
+pub static FOCUSED_WINDOW_SIGNAL: GlobalSignal<focused_window::FocusedWindow> =
     Signal::global(win::get_focused_window);
 pub static CAPTURED_WINDOW_SIGNAL: GlobalSignal<Option<CapturedWindow>> = Signal::global(|| None);
 pub static CAPTURE_ARMED_SIGNAL: GlobalSignal<bool> = Signal::global(|| false);
@@ -35,7 +35,7 @@ pub struct CaptureTarget {
 pub struct CapturedWindow {
     pub(crate) generation: u64,
     pub(crate) target: Option<CaptureTarget>,
-    pub(crate) window: win::WindowMetadata,
+    pub(crate) window: focused_window::FocusedWindow,
 }
 
 impl CapturedWindow {

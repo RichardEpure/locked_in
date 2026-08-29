@@ -114,11 +114,11 @@ fn startup_projection_applies_the_current_publication_after_a_subscription_race(
 
 #[test]
 fn focused_window_bridge_projects_the_current_value_before_waiting_for_changes() {
-    let current = win::WindowMetadata {
+    let current = FocusedWindow {
         title: Some("already focused".to_string()),
-        ..win::WindowMetadata::default()
+        ..FocusedWindow::default()
     };
-    let (publisher, mut receiver) = tokio::sync::watch::channel(win::WindowMetadata::default());
+    let (publisher, mut receiver) = tokio::sync::watch::channel(FocusedWindow::default());
     publisher.send_replace(current.clone());
     let projected = RefCell::new(None);
 

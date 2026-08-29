@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{
-    ALT_TAB_HOST_CLASS, ForegroundPublisher, WindowMetadata, startup_registry_value_exists,
+    ALT_TAB_HOST_CLASS, FocusedWindow, ForegroundPublisher, startup_registry_value_exists,
 };
 
 #[test]
@@ -53,8 +53,8 @@ fn startup_registry_query_errors_are_not_reported_as_disabled() {
     assert!(value_error.to_string().contains("value query failed"));
 }
 
-fn window(title: &str) -> WindowMetadata {
-    WindowMetadata {
+fn window(title: &str) -> FocusedWindow {
+    FocusedWindow {
         title: Some(title.to_string()),
         class: Some("WindowClass".to_string()),
         exe: Some(PathBuf::from("app.exe")),
@@ -64,7 +64,7 @@ fn window(title: &str) -> WindowMetadata {
 fn observe(
     publisher: &ForegroundPublisher,
     raw_hwnd: isize,
-    window: WindowMetadata,
+    window: FocusedWindow,
 ) -> Option<super::ForegroundObservation> {
     let ticket = publisher.begin(raw_hwnd)?;
     publisher.complete(ticket, window)
@@ -109,9 +109,9 @@ fn ignored_alt_tab_host_breaks_duplicate_identity_without_publication() {
         observe(
             &publisher,
             20,
-            WindowMetadata {
+            FocusedWindow {
                 class: Some(ALT_TAB_HOST_CLASS.to_string()),
-                ..WindowMetadata::default()
+                ..FocusedWindow::default()
             }
         )
         .is_none()
@@ -178,9 +178,9 @@ fn accepted_observations_project_metadata_for_existing_consumers() {
 #[test]
 fn partial_metadata_is_retained_with_identity_and_generation() {
     let publisher = ForegroundPublisher::new();
-    let partial = WindowMetadata {
+    let partial = FocusedWindow {
         class: Some("PartialWindow".to_string()),
-        ..WindowMetadata::default()
+        ..FocusedWindow::default()
     };
 
     observe(&publisher, 10, partial.clone());

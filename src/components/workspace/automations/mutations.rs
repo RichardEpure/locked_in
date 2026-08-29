@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use crate::{
     config::{Automation, AutomationCase, SendAction, TextCondition, WindowMatcher},
-    win,
+    focused_window::FocusedWindow,
 };
 
 pub(super) fn add_case(draft: &mut Signal<Automation>) {
@@ -43,7 +43,7 @@ pub(in crate::components::workspace) fn insert_captured_matcher(
     automation: &mut Automation,
     case_id: &str,
     exceptions: bool,
-    captured: &win::WindowMetadata,
+    captured: &FocusedWindow,
 ) -> Option<(String, usize)> {
     let case_index = automation
         .cases

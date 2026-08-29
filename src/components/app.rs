@@ -16,6 +16,7 @@ use crate::{
     FOCUSED_WINDOW_SIGNAL, app_log, arm_capture,
     automation_runtime::AutomationRuntime,
     config::{LogLevel, PublishedConfig},
+    focused_window::FocusedWindow,
     win,
 };
 
@@ -187,8 +188,8 @@ fn effective_close_behavior(close_to_tray: bool, tray_available: bool) -> Window
 }
 
 fn publish_current_focused_window(
-    receiver: &mut tokio::sync::watch::Receiver<win::WindowMetadata>,
-    publish: impl FnOnce(win::WindowMetadata),
+    receiver: &mut tokio::sync::watch::Receiver<FocusedWindow>,
+    publish: impl FnOnce(FocusedWindow),
 ) {
     publish(receiver.borrow_and_update().clone());
 }

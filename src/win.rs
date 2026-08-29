@@ -6,7 +6,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-pub use crate::focused_window::{FocusedWindow as WindowMetadata, ForegroundObservation};
+use crate::focused_window::{FocusedWindow, ForegroundObservation};
 use tokio::sync::watch;
 use windows::{
     Win32::{
@@ -70,7 +70,7 @@ impl ObservationState {
     fn complete(
         &mut self,
         ticket: ObservationTicket,
-        window: WindowMetadata,
+        window: FocusedWindow,
     ) -> Option<ForegroundObservation> {
         if ticket.sequence != self.latest_sequence {
             return None;
@@ -94,13 +94,13 @@ impl ObservationState {
 struct ForegroundPublisher {
     state: Mutex<ObservationState>,
     observations: watch::Sender<ForegroundObservation>,
-    metadata: watch::Sender<WindowMetadata>,
+    metadata: watch::Sender<FocusedWindow>,
 }
 
 impl ForegroundPublisher {
     fn new() -> Self {
         let (observations, _) = watch::channel(ForegroundObservation::default());
-        let (metadata, _) = watch::channel(WindowMetadata::default());
+        let (metadata, _) = watch::channel(FocusedWindow::default());
         Self {
             state: Mutex::new(ObservationState::default()),
             observations,
@@ -130,7 +130,7 @@ impl ForegroundPublisher {
     fn complete(
         &self,
         ticket: ObservationTicket,
-        window: WindowMetadata,
+        window: FocusedWindow,
     ) -> Option<ForegroundObservation> {
         self.complete_before_versioned(ticket, window, || {})
     }
@@ -138,7 +138,7 @@ impl ForegroundPublisher {
     fn complete_before_versioned(
         &self,
         ticket: ObservationTicket,
-        window: WindowMetadata,
+        window: FocusedWindow,
         before_versioned: impl FnOnce(),
     ) -> Option<ForegroundObservation> {
         let mut state = self
@@ -156,11 +156,11 @@ impl ForegroundPublisher {
         self.observations.subscribe()
     }
 
-    fn subscribe_metadata(&self) -> watch::Receiver<WindowMetadata> {
+    fn subscribe_metadata(&self) -> watch::Receiver<FocusedWindow> {
         self.metadata.subscribe()
     }
 
-    fn metadata(&self) -> WindowMetadata {
+    fn metadata(&self) -> FocusedWindow {
         self.metadata.borrow().clone()
     }
 }
@@ -172,7 +172,7 @@ pub fn subscribe_foreground_observations() -> watch::Receiver<ForegroundObservat
     FOREGROUND_PUBLISHER.subscribe_observations()
 }
 
-pub fn subscribe_focused_window() -> watch::Receiver<WindowMetadata> {
+pub fn subscribe_focused_window() -> watch::Receiver<FocusedWindow> {
     FOREGROUND_PUBLISHER.subscribe_metadata()
 }
 
@@ -258,12 +258,12 @@ fn process_exe(pid: u32) -> Option<PathBuf> {
     }
 }
 
-pub fn get_focused_window() -> WindowMetadata {
+pub fn get_focused_window() -> FocusedWindow {
     FOREGROUND_PUBLISHER.metadata()
 }
 
-fn resolve_window_metadata(hwnd: HWND) -> WindowMetadata {
-    WindowMetadata {
+fn resolve_window_metadata(hwnd: HWND) -> FocusedWindow {
+    FocusedWindow {
         title: hwnd_title(hwnd),
         class: hwnd_class(hwnd),
         exe: hwnd_pid(hwnd).and_then(process_exe),

@@ -19,7 +19,7 @@ fn automation_with_case() -> Automation {
 #[test]
 fn captured_matcher_routes_metadata_to_the_selected_group() {
     let mut automation = automation_with_case();
-    let captured = win::WindowMetadata {
+    let captured = FocusedWindow {
         title: Some("Editor".into()),
         class: Some("WindowClass".into()),
         exe: Some(std::path::PathBuf::from(r"C:\Apps\editor.exe")),
@@ -48,7 +48,7 @@ fn captured_matcher_leaves_automation_unchanged_when_case_is_missing() {
         &mut automation,
         "missing-case",
         false,
-        &win::WindowMetadata::default(),
+        &FocusedWindow::default(),
     );
 
     assert_eq!(result, None);

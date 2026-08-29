@@ -173,7 +173,7 @@ fn captured_matcher_commits_durably_in_one_publication() {
     let durable = seed_automation(&coordinator, automation_with_case("automation"));
     let mut receiver = coordinator.subscribe();
     receiver.borrow_and_update();
-    let captured = win::WindowMetadata {
+    let captured = FocusedWindow {
         title: Some("Editor".into()),
         class: Some("EditorWindow".into()),
         exe: Some(PathBuf::from(r"C:\Apps\editor.exe")),

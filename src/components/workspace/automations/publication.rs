@@ -2,7 +2,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 use crate::{
     config::{Automation, ConfigCoordinator, ConfigCoordinatorError, PublishedConfig},
-    win,
+    focused_window::FocusedWindow,
 };
 
 use super::mutations::insert_captured_matcher;
@@ -149,7 +149,7 @@ pub(in crate::components::workspace) fn commit_captured_matcher(
     automation_id: &str,
     case_id: &str,
     exception: bool,
-    captured: &win::WindowMetadata,
+    captured: &FocusedWindow,
 ) -> Result<Arc<PublishedConfig>, AutomationCommitError> {
     let mut candidate = editable_at_revision(coordinator, expected_revision)?;
     let Some(automation) = candidate
