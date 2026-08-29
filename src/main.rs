@@ -21,8 +21,7 @@ use dioxus::{
 
 pub static FOCUSED_WINDOW_SIGNAL: GlobalSignal<win::WindowMetadata> =
     Signal::global(win::get_focused_window);
-pub static CAPTURED_WINDOW_SIGNAL: GlobalSignal<Option<win::WindowMetadata>> =
-    Signal::global(|| None);
+pub static CAPTURED_WINDOW_SIGNAL: GlobalSignal<Option<CapturedWindow>> = Signal::global(|| None);
 pub static CAPTURE_ARMED_SIGNAL: GlobalSignal<bool> = Signal::global(|| false);
 pub static CAPTURE_GENERATION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static CAPTURE_TARGET_SIGNAL: GlobalSignal<Option<CaptureTarget>> = Signal::global(|| None);
@@ -38,6 +37,19 @@ pub struct CaptureTarget {
     pub(crate) exception: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedWindow {
+    pub(crate) generation: u64,
+    pub(crate) target: Option<CaptureTarget>,
+    pub(crate) window: win::WindowMetadata,
+}
+
+impl CapturedWindow {
+    pub(crate) fn belongs_to(&self, generation: u64, target: &Option<CaptureTarget>) -> bool {
+        self.generation == generation && &self.target == target
+    }
+}
+
 impl CaptureTarget {
     pub fn new(automation_id: String, case_id: String, exception: bool) -> Self {
         Self {
@@ -49,24 +61,31 @@ impl CaptureTarget {
 }
 
 pub fn arm_capture(target: Option<CaptureTarget>) {
+    let generation = CAPTURE_GENERATION_SIGNAL
+        .read()
+        .checked_add(1)
+        .expect("capture generation overflow");
+    *CAPTURE_GENERATION_SIGNAL.write() = generation;
     *CAPTURED_WINDOW_SIGNAL.write() = None;
     *CAPTURE_TARGET_SIGNAL.write() = target;
     *CAPTURE_ARMED_SIGNAL.write() = true;
-    *CAPTURE_GENERATION_SIGNAL.write() += 1;
-    let generation = *CAPTURE_GENERATION_SIGNAL.read();
     spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-        if *CAPTURE_GENERATION_SIGNAL.read() == generation {
+        if *CAPTURE_ARMED_SIGNAL.read() && *CAPTURE_GENERATION_SIGNAL.read() == generation {
             cancel_capture();
         }
     });
 }
 
 pub fn cancel_capture() {
+    let generation = CAPTURE_GENERATION_SIGNAL
+        .read()
+        .checked_add(1)
+        .expect("capture generation overflow");
+    *CAPTURE_GENERATION_SIGNAL.write() = generation;
     *CAPTURE_ARMED_SIGNAL.write() = false;
     *CAPTURE_TARGET_SIGNAL.write() = None;
     *CAPTURED_WINDOW_SIGNAL.write() = None;
-    *CAPTURE_GENERATION_SIGNAL.write() += 1;
 }
 
 struct ConfigBootstrap {

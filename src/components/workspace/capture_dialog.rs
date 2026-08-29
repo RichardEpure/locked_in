@@ -1,21 +1,27 @@
 use dioxus::prelude::*;
 
 use crate::{
-    CAPTURED_WINDOW_SIGNAL, CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL,
-    automation_runtime::AutomationRuntime, cancel_capture, config,
+    CAPTURE_GENERATION_SIGNAL, CAPTURED_WINDOW_SIGNAL, DIRTY_EDITOR_SIGNAL, cancel_capture,
 };
 
-use super::automations::insert_captured_matcher;
+use super::automations::{commit_captured_matcher, use_config_publication};
 
 #[component]
 pub(super) fn CaptureDialog() -> Element {
-    let runtime = consume_context::<AutomationRuntime>();
-    let captured = CAPTURED_WINDOW_SIGNAL.read().clone().unwrap_or_default();
+    let (coordinator, mut publication) = use_config_publication();
+    let generation = *CAPTURE_GENERATION_SIGNAL.read();
+    let captured = CAPTURED_WINDOW_SIGNAL
+        .read()
+        .as_ref()
+        .filter(|captured| captured.belongs_to(generation, &None))
+        .map(|captured| captured.window.clone())
+        .unwrap_or_default();
     let mut automation_id = use_signal(String::new);
     let mut case_id = use_signal(String::new);
     let mut exception = use_signal(|| false);
     let mut message = use_signal(String::new);
-    let config = CONFIG_SIGNAL.read().clone();
+    let published = publication.read().clone();
+    let config = published.editable();
     let selected_cases = config
         .automations
         .iter()
@@ -56,21 +62,18 @@ pub(super) fn CaptureDialog() -> Element {
                 footer { class: "toolbar modal-actions",
                     button { class: "button ghost", onclick: move |_| cancel_capture(), "Cancel" }
                     button { class: "button primary", disabled: automation_id().is_empty() || case_id().is_empty(), onclick: move |_| {
-                        let mut next = CONFIG_SIGNAL.read().clone();
                         let target_automation_id = automation_id();
                         if DIRTY_EDITOR_SIGNAL.read().is_some() {
                             message.set("Save or cancel the open draft, or use Capture next inside that editor".into());
                             return;
                         }
-                        let Some(automation) = next.automations.iter_mut().find(|automation| automation.id == target_automation_id) else {
-                            message.set("Automation no longer exists".into()); return;
-                        };
-                        if insert_captured_matcher(automation, &case_id(), exception(), &captured).is_none() {
-                            message.set("Case no longer exists".into()); return;
-                        }
-                        match config::save(&next) {
-                            Ok(()) => { runtime.replace_config(next.clone()).expect("saved configuration must compile"); *CONFIG_SIGNAL.write() = next; *CONFIG_REVISION_SIGNAL.write() += 1; cancel_capture(); }
-                            Err(error) => message.set(format!("Could not save matcher: {error}")),
+                        let expected_revision = publication.read().revision();
+                        match commit_captured_matcher(&coordinator, expected_revision, &target_automation_id, &case_id(), exception(), &captured) {
+                            Ok(published) => {
+                                publication.set(published);
+                                cancel_capture();
+                            }
+                            Err(error) => message.set(format!("Could not save matcher; your capture and selections are preserved: {error}")),
                         }
                     }, "Add matcher" }
                 }

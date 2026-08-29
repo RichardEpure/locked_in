@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use dioxus::prelude::*;
 
 use crate::{
-    CONFIG_SIGNAL,
     automation_runtime::{AutomationRuntime, TestDispatchResult},
-    config::{Automation, SendAction},
+    config::{Automation, Device, PublishedConfig, SendAction},
 };
 
 use super::{
@@ -18,6 +19,7 @@ pub(super) struct ActionEditorProps {
     case_index: Option<usize>,
     action_index: usize,
     action: SendAction,
+    publication: Signal<Arc<PublishedConfig>>,
 }
 
 #[component]
@@ -26,7 +28,8 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     let inventory = consume_context::<HidInventoryContext>().current();
     let mut draft = props.draft;
     let action = props.action;
-    let devices = CONFIG_SIGNAL.read().devices.clone();
+    let publication = props.publication;
+    let devices = action_destinations(&publication.read());
     let devices_with_presence = devices
         .iter()
         .cloned()
@@ -65,14 +68,14 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                             return;
                         };
                         action.report = report;
-                        let config = CONFIG_SIGNAL.read();
+                        let published = publication.read().clone();
+                        let config = published.editable();
                         let validation_errors = config.validate_action(&action);
                         if !validation_errors.is_empty() {
                             test_result.set(Some((false, validation_errors.iter().map(|error| error.message.as_str()).collect::<Vec<_>>().join("; "))));
                             return;
                         }
                         let devices = action.device_ids.iter().filter_map(|device_id| config.devices.iter().find(|device| device.id == *device_id).cloned()).collect();
-                        drop(config);
                         test_in_flight.set(true);
                         let runtime = runtime.clone();
                         let action = action.clone();
@@ -118,6 +121,10 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
             if let Some((success, text)) = test_result() { small { class: if success { "message success" } else { "message error" }, "{text}" } }
         }
     }
+}
+
+pub(super) fn action_destinations(publication: &PublishedConfig) -> Vec<Device> {
+    publication.editable().devices.clone()
 }
 
 fn parse_report_hex(value: &str) -> Result<Vec<u8>, hex::FromHexError> {
