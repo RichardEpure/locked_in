@@ -247,10 +247,11 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         div {
             class: "editor-scroll",
             section { class: "editor-card overview-card",
-                div { class: "section-heading", span { class: "step", "01" } div { h3 { "Automation" } p { "Name this automation and choose when it is active" } } }
+                div { class: "section-heading split", span { class: "step", "01" } div { h3 { "Automation" } p { "Name this automation and choose when it is active" } }
+                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().enabled = event.checked() } }
+                }
                 div { class: "form-grid two",
                     label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().name = event.value() } }
-                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().enabled = event.checked() } small { "Leave this off to save an incomplete draft; turn it on when ready to run." } }
                 }
             }
             section { class: "editor-card trigger-card",

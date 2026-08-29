@@ -133,17 +133,13 @@ label {
 }
 
 .toggle-field {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 18px;
-    column-gap: 7px;
-    row-gap: 4px;
+    display: inline-flex;
+    flex-direction: row;
+    gap: 8px;
     align-items: center;
+    justify-self: end;
     padding: 7px 2px;
-
-    small {
-        grid-column: 1 / -1;
-        font-weight: 400;
-    }
+    cursor: pointer;
 }
 
 .matcher-group__heading,
