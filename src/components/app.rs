@@ -24,6 +24,10 @@ use super::{PublishedConfigContext, capture_shortcut::CaptureShortcut, workspace
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
+const ROBOTO_FONT: Asset = asset!(
+    "/assets/fonts/Roboto-VariableFont_wdth,wght.ttf",
+    AssetOptions::builder().with_hash_suffix(false)
+);
 
 #[component]
 pub(crate) fn App() -> Element {
@@ -140,6 +144,7 @@ pub(crate) fn App() -> Element {
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
+        document::Link { rel: "preload", href: ROBOTO_FONT, as: "font", r#type: "font/ttf", crossorigin: "anonymous" }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         CaptureShortcut {}
         Workspace {}

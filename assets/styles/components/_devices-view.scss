@@ -20,6 +20,8 @@
     }
 
     & > span {
+        display: flex;
+        align-items: center;
         font-size: 0.85rem;
         white-space: nowrap;
     }
@@ -92,7 +94,7 @@
     display: flex;
     width: 100%;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     margin-top: 6px;
     padding: 7px;
     color: var(--text);
