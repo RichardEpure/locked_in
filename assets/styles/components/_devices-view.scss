@@ -1,6 +1,6 @@
 .discovery-refresh {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: space-between;
     gap: 4px;
     width: 100%;
@@ -25,6 +25,8 @@
     }
 
     small {
+        display: flex;
+        align-items: center;
         color: var(--text-muted);
         font-size: 0.62rem;
         white-space: nowrap;
