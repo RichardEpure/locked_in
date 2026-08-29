@@ -1,6 +1,7 @@
 {
     "name": "locked_in",
-    "version": "1.0.0",
+    "version": "0.1.0",
+    "private": true,
     "description": "",
     "main": "index.js",
     "scripts": {
@@ -17,7 +18,7 @@
     },
     "keywords": [],
     "author": "",
-    "license": "ISC",
+    "license": "AGPL-3.0-only",
     "bugs": {
         "url": "https://github.com/RichardEpure/locked_in/issues"
     },
