@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     draft::{DeviceDraft, device_references},
-    numeric_field::NumericField,
+    numeric_field::{NumericField, NumericFormat},
 };
 use crate::components::workspace::{
     hid_inventory::{HidInventoryContext, hid_presence_view},
@@ -108,14 +108,14 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
             section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Identity" } p { "Name this device for use in report destinations" } } }
                 div { class: "form-grid two", label { "Name" input { value: "{device.name}", oninput: move |event| editor.write().edited.name = event.value() } } label { "Stable ID" input { value: "{device.id}", disabled: true } } }
             }
-            section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "HID interface" } p { "Enter decimal HID identifiers and report settings" } } }
+            section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "HID interface" } p { "Enter hexadecimal HID identifiers and a decimal report length" } } }
                 div { class: "form-grid three",
-                    NumericField { label: "Vendor ID", value: device.vid, on_change: move |value| editor.write().edited.vid = value }
-                    NumericField { label: "Product ID", value: device.pid, on_change: move |value| editor.write().edited.pid = value }
-                    NumericField { label: "Usage page", value: device.usage_page, on_change: move |value| editor.write().edited.usage_page = value }
-                    NumericField { label: "Usage", value: device.usage, on_change: move |value| editor.write().edited.usage = value }
-                    NumericField { label: "Report length", value: device.report_length, on_change: move |value| editor.write().edited.report_length = value }
-                    label { "Report ID" input { type: "number", min: "0", max: "255", value: "{device.report_id}", oninput: move |event| if let Ok(value) = event.value().parse() { editor.write().edited.report_id = value } } }
+                    NumericField { label: "Vendor ID (hex)", value: device.vid, max: u16::MAX, format: NumericFormat::Hexadecimal { width: 4 }, on_change: move |value| editor.write().edited.vid = value }
+                    NumericField { label: "Product ID (hex)", value: device.pid, max: u16::MAX, format: NumericFormat::Hexadecimal { width: 4 }, on_change: move |value| editor.write().edited.pid = value }
+                    NumericField { label: "Usage page (hex)", value: device.usage_page, max: u16::MAX, format: NumericFormat::Hexadecimal { width: 4 }, on_change: move |value| editor.write().edited.usage_page = value }
+                    NumericField { label: "Usage (hex)", value: device.usage, max: u16::MAX, format: NumericFormat::Hexadecimal { width: 4 }, on_change: move |value| editor.write().edited.usage = value }
+                    NumericField { label: "Report length (bytes)", value: device.report_length, max: u16::MAX, format: NumericFormat::Decimal, on_change: move |value| editor.write().edited.report_length = value }
+                    NumericField { label: "Report ID (hex)", value: device.report_id.into(), max: u8::MAX.into(), format: NumericFormat::Hexadecimal { width: 2 }, on_change: move |value| if let Ok(value) = u8::try_from(value) { editor.write().edited.report_id = value } }
                 }
                 div { class: "device-note", strong { "Use a connected device" } p { "Use Connected interfaces to add or select a detected device, or enter HID values manually." } }
             }

@@ -41,7 +41,7 @@ impl Display for InterfaceSelector {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{:04X}:{:04X} usage page {} usage {}",
+            "{:04X}:{:04X} usage page {:04X} usage {:04X}",
             self.vendor_id, self.product_id, self.usage_page, self.usage
         )
     }

@@ -76,6 +76,18 @@ fn selector(value: u16) -> InterfaceSelector {
     }
 }
 
+#[test]
+fn selector_display_formats_every_identifier_as_four_digit_hexadecimal() {
+    let selector = InterfaceSelector {
+        vendor_id: 0x4359,
+        product_id: 0,
+        usage_page: 0xff60,
+        usage: 0x61,
+    };
+
+    assert_eq!(selector.to_string(), "4359:0000 usage page FF60 usage 0061");
+}
+
 fn observed(selector: InterfaceSelector, locator: u8, product: &str) -> ObservedInterface<u8> {
     ObservedInterface {
         selector,

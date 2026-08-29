@@ -30,6 +30,13 @@ fn selector_aliases(devices: &[Device], selector: InterfaceSelector) -> Selector
     }
 }
 
+fn format_selector(selector: InterfaceSelector) -> String {
+    format!(
+        "{:04X}:{:04X} · {:04X}:{:04X}",
+        selector.vendor_id, selector.product_id, selector.usage_page, selector.usage
+    )
+}
+
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct DiscoveryRowProps {
     pub row: HidInventoryRow,
@@ -83,13 +90,7 @@ pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
             "Refresh connected interfaces before adopting this row".to_string(),
         ),
     };
-    let selector_text = format!(
-        "{:04X}:{:04X} · {}:{}",
-        row.selector.vendor_id,
-        row.selector.product_id,
-        row.selector.usage_page,
-        row.selector.usage
-    );
+    let selector_text = format_selector(row.selector);
 
     rsx! {
         div {
