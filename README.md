@@ -1,7 +1,9 @@
 # About
+
 LockedIn is a companion app where you can create rules that listen and trigger on system events and send reports to perhipherals that can listen for raw hid events (e.g. [QMK](https://docs.qmk.fm/features/rawhid)), allowing your perhipherals to react to system events.
 
 An automation consists of:
+
 - One event.
 - Ordered cases; the first matching case runs.
 - Optional exception matchers for each case.
@@ -9,11 +11,13 @@ An automation consists of:
 - An optional `otherwise` branch when no case matches.
 
 ## Platform Support
+
 - [x] Windows
 - [ ] MacOS
 - [ ] Linux
 
 ## Example `config.toml`
+
 ```toml
 version = 2
 
@@ -75,50 +79,26 @@ WebView data. Release builds use `%LOCALAPPDATA%\LockedIn`; debug builds use the
 working directory. Set `LOCKED_IN_DATA_DIR` to use an isolated root for development
 or automation.
 
-Configuration loading is strict: the file must use schema version 2 and may not
-contain unknown fields. A load failure shows an error screen and leaves the source
-file unchanged. Editor changes remain local until Save; Save and explicit Reload
-validate before atomically publishing one durable configuration to the UI and
-automation runtime.
-
-Close to tray is effective only when the tray icon was created successfully. Focused
-window automation converges on the latest observed window at the next safe HID batch
-boundary, ahead of queued Test and refresh commands; an in-flight report batch is
-never interrupted.
-
 # Setup
+
 - Install Rust and the platform dependencies from the [Dioxus setup guide](https://dioxuslabs.com/learn/0.7/getting_started/).
 - Install the pinned Dioxus CLI: `cargo install dioxus-cli --version 0.7.10 --locked`.
 - Clone this repository.
 - Install the locked Node dependencies: `npm ci`.
 
 ## Build
+
 Run `npm run bundle` to generate compressed CSS and create a locked release desktop bundle.
 
-## Windows artifacts and releases
-The `Windows build` GitHub Actions workflow runs repository verification and creates a
-locked Windows installer for pull requests, pushes to any branch, and manually
-requested builds. Tag pushes do not trigger builds. Successful runs retain an immutable
-`windows-installer-<run-id>-<run-attempt>` artifact for 30 days. It contains the
-installer, its SHA-256 checksum, and a provenance manifest identifying the source
-commit and version. The workflow summary reports the immutable artifact ID and
-installer checksum that identify a candidate for validation.
-
-A successful build never creates a tag or GitHub release. After an installer has been
-validated, run the separate `Windows release` workflow from `main` with its build run
-artifact ID, Cargo-derived tag, and either `prerelease` or `stable`. The workflow
-runs trusted publication logic from `main`, verifies the selected build's source commit,
-version, and checksum, creates the tag at that commit, and publishes that exact
-installer. The selected build may come from any pushed branch or manual build, including
-an older commit. Releases made from an unsigned installer include a warning that Windows
-or Microsoft Defender SmartScreen may warn before installation. If publication fails
-after creating the tag, inspect and clean up the partial tag or release before retrying.
-
 ## Develop
+
 Run `npm run dev` to generate development CSS, watch Sass imports, and serve the desktop app.
 
 ## Test
-Run `npm test` to generate development CSS and run the locked Rust test suite.
-Repository verification also uses `cargo fmt --all --check`,
-`cargo clippy --locked --all-targets -- -D warnings`, `npm run bundle`, and
-`git diff --check`.
+
+Run `npm test` to generate required assets and run the Rust test suite.
+
+## Verify
+
+Run `npm run verify` to check formatting, run tests and Clippy, and build the release
+bundle.
