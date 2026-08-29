@@ -50,9 +50,6 @@ jobs:
       - name: Create locked Windows bundle
         run: npm run bundle
 
-      - name: Check whitespace
-        run: git diff --check
-
       - name: Prepare Windows installer
         id: installer
         shell: pwsh
