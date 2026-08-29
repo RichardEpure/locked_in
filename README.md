@@ -70,9 +70,21 @@ device_ids = ["my-device"]
 Matcher operators are `equals`, `contains`, and `regex`. Reports shorter than a device's
 configured report length are zero-padded; oversized reports are rejected before save or test.
 
-Release builds store `config.toml`, logs, panic logs, and WebView data under
-`%LOCALAPPDATA%\LockedIn`. Debug builds use the repository directory. Set
-`LOCKED_IN_DATA_DIR` to use an isolated data directory for development or automation.
+At startup, LockedIn resolves one data root for `config.toml`, logs, panic logs, and
+WebView data. Release builds use `%LOCALAPPDATA%\LockedIn`; debug builds use the
+working directory. Set `LOCKED_IN_DATA_DIR` to use an isolated root for development
+or automation.
+
+Configuration loading is strict: the file must use schema version 2 and may not
+contain unknown fields. A load failure shows an error screen and leaves the source
+file unchanged. Editor changes remain local until Save; Save and explicit Reload
+validate before atomically publishing one durable configuration to the UI and
+automation runtime.
+
+Close to tray is effective only when the tray icon was created successfully. Focused
+window automation converges on the latest observed window at the next safe HID batch
+boundary, ahead of queued Test and refresh commands; an in-flight report batch is
+never interrupted.
 
 # Setup
 - Install Rust and the platform dependencies from the [Dioxus setup guide](https://dioxuslabs.com/learn/0.7/getting_started/).
@@ -88,3 +100,6 @@ Run `npm run dev` to generate development CSS, watch Sass imports, and serve the
 
 ## Test
 Run `npm test` to generate development CSS and run the locked Rust test suite.
+Repository verification also uses `cargo fmt --all --check`,
+`cargo clippy --locked --all-targets -- -D warnings`, `npm run bundle`, and
+`git diff --check`.

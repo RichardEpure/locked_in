@@ -86,7 +86,7 @@ fn new_and_duplicate_drafts_do_not_leak_and_cancel_restores_publication() {
     new_draft.name = "Unsaved new".into();
 
     assert!(coordinator.current().editable().automations.is_empty());
-    assert!(store.load().unwrap().automations.is_empty());
+    assert!(store.load_for_test().unwrap().automations.is_empty());
     assert_eq!(cancel_automation(&initial, &new_draft.id, true), None);
 
     let durable = seed_automation(&coordinator, automation_with_case("automation"));
@@ -96,7 +96,7 @@ fn new_and_duplicate_drafts_do_not_leak_and_cancel_restores_publication() {
     edited.name = "Unsaved edit".into();
 
     assert_eq!(coordinator.current().editable().automations.len(), 1);
-    assert_eq!(store.load().unwrap().automations.len(), 1);
+    assert_eq!(store.load_for_test().unwrap().automations.len(), 1);
     assert_eq!(
         cancel_automation(&coordinator.current(), &edited.id, false)
             .unwrap()
@@ -155,7 +155,7 @@ fn successful_save_and_delete_each_publish_exactly_one_revision() {
     assert!(receiver.has_changed().unwrap());
     assert!(Arc::ptr_eq(&receiver.borrow_and_update(), &saved));
     assert!(!receiver.has_changed().unwrap());
-    assert_eq!(store.load().unwrap(), *saved.editable().as_ref());
+    assert_eq!(store.load_for_test().unwrap(), *saved.editable().as_ref());
 
     let deleted = delete_automation(&coordinator, saved.revision(), &draft.id).unwrap();
 
@@ -164,7 +164,7 @@ fn successful_save_and_delete_each_publish_exactly_one_revision() {
     assert!(Arc::ptr_eq(&receiver.borrow_and_update(), &deleted));
     assert!(!receiver.has_changed().unwrap());
     assert!(deleted.editable().automations.is_empty());
-    assert_eq!(store.load().unwrap(), *deleted.editable().as_ref());
+    assert_eq!(store.load_for_test().unwrap(), *deleted.editable().as_ref());
 }
 
 #[test]
@@ -195,7 +195,10 @@ fn captured_matcher_commits_durably_in_one_publication() {
     assert!(!receiver.has_changed().unwrap());
     let matcher = &published.editable().automations[0].cases[0].applications[0];
     assert_eq!(matcher.title.as_ref().unwrap().value, "Editor");
-    assert_eq!(store.load().unwrap(), *published.editable().as_ref());
+    assert_eq!(
+        store.load_for_test().unwrap(),
+        *published.editable().as_ref()
+    );
 }
 
 #[test]

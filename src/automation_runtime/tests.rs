@@ -12,11 +12,21 @@ use super::{
 };
 use crate::{
     config::{
-        Automation, AutomationCase, Config, Device, SendAction, TextCondition, WindowMatcher,
+        ActiveConfig, Automation, AutomationCase, Config, Device, SendAction, TextCondition,
+        ValidationError, WindowMatcher,
     },
     focused_window::{FocusedWindow, ForegroundObservation},
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
 };
+
+fn replace_config_for_test(
+    runtime: &AutomationRuntime,
+    config: Config,
+) -> std::result::Result<(), Vec<ValidationError>> {
+    let active = Arc::new(ActiveConfig::compile(&config)?);
+    runtime.replace_active_config(active);
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BackendEvent {
@@ -459,9 +469,7 @@ fn config_replacement_completed_before_claim_supplies_the_focus_snapshot() {
 
     focus_tx.send_replace(focused(1, "target"));
     claim_reached.recv().unwrap();
-    runtime
-        .replace_config(config(0x20, &["automatic"]))
-        .unwrap();
+    replace_config_for_test(&runtime, config(0x20, &["automatic"])).unwrap();
     release_claim.send(()).unwrap();
 
     assert_eq!(
@@ -558,9 +566,7 @@ fn replacement_before_a_focus_boundary_supplies_that_batch_snapshot() {
     refresh_started.recv().unwrap();
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshStarted);
     focus_tx.send_replace(focused(1, "target"));
-    runtime
-        .replace_config(config(0x20, &["automatic"]))
-        .unwrap();
+    replace_config_for_test(&runtime, config(0x20, &["automatic"])).unwrap();
     refresh_release_tx.send(()).unwrap();
 
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshFinished(1));
@@ -679,9 +685,7 @@ fn no_action_focus_is_handled_without_retriggering_after_replacement() {
     assert_eq!(block_on(marker).unwrap().unwrap().sent, 1);
     assert_eq!(focus_progress(&runtime).latest_handled, Some(1));
 
-    runtime
-        .replace_config(routed_config(&[("unmatched", 0x20)]))
-        .unwrap();
+    replace_config_for_test(&runtime, routed_config(&[("unmatched", 0x20)])).unwrap();
     assert_eq!(
         runtime.request_hid_refresh().unwrap(),
         HidRefreshRequestResult::Queued
@@ -705,7 +709,7 @@ fn invalid_replacement_is_rejected_without_filtering_or_replacing_routes() {
 
     let mut invalid = config(0x20, &["automatic"]);
     invalid.automations[0].cases[0].actions[0].device_ids = vec!["missing".to_string()];
-    assert!(runtime.replace_config(invalid).is_err());
+    assert!(replace_config_for_test(&runtime, invalid).is_err());
     focus_tx.send_replace(focused(1, "target"));
     assert_eq!(
         events.recv().unwrap(),
@@ -1036,7 +1040,7 @@ fn blocked_dispatch_keeps_its_snapshot_and_uses_only_latest_pending_focus() {
             latest_cancelled: None,
         }
     );
-    runtime.replace_config(config(0x20, &["one"])).unwrap();
+    replace_config_for_test(&runtime, config(0x20, &["one"])).unwrap();
     focus_tx.send_replace(focused(2, "not matching"));
     focus_tx.send_replace(focused(3, "target latest"));
     assert_eq!(

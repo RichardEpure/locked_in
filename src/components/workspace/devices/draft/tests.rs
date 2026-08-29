@@ -68,7 +68,7 @@ fn device(id: &str) -> Device {
 fn coordinator(initial: EditableConfig) -> (TestDirectory, Arc<ConfigCoordinator>) {
     let directory = TestDirectory::new();
     let store = Arc::new(ConfigStore::new(directory.0.join("config.toml")));
-    store.save(&initial).unwrap();
+    store.save_for_test(&initial).unwrap();
     let coordinator = ConfigCoordinator::initial_load(store, Arc::new(ConfirmedStartup)).unwrap();
     (directory, Arc::new(coordinator))
 }

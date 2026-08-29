@@ -11,10 +11,13 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{ActiveConfig, Config, Device, SendAction, ValidationError},
+    config::{ActiveConfig, Device, SendAction},
     focused_window::ForegroundObservation,
     hid::{HidBackend, HidInventory},
 };
+
+#[cfg(test)]
+use crate::config::{Config, ValidationError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FocusSourceState {
@@ -335,12 +338,6 @@ impl AutomationRuntime {
             }),
         )?;
         Ok((runtime, owner, started_rx, release_tx))
-    }
-
-    pub fn replace_config(&self, config: Config) -> std::result::Result<(), Vec<ValidationError>> {
-        let config = Arc::new(ActiveConfig::compile(&config)?);
-        self.replace_active_config(config);
-        Ok(())
     }
 
     pub(crate) fn replace_active_config(&self, config: Arc<ActiveConfig>) {

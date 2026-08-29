@@ -3,7 +3,7 @@ use std::process::Command;
 use dioxus::prelude::*;
 
 use crate::{
-    CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, CONFIG_LOAD_ERROR, DIRTY_EDITOR_SIGNAL,
+    CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, ConfigurationLoadError, DIRTY_EDITOR_SIGNAL,
     automation_runtime::{AutomationRuntime, RuntimePhase},
     config,
 };
@@ -31,14 +31,23 @@ enum Section {
 
 #[component]
 pub(super) fn Workspace() -> Element {
-    if let Some(error) = CONFIG_LOAD_ERROR.as_ref() {
+    let load_error = consume_context::<Option<ConfigurationLoadError>>();
+    let paths = consume_context::<config::ApplicationPaths>();
+    if let Some(ConfigurationLoadError {
+        message,
+        config_path_available,
+    }) = load_error
+    {
+        let config_path = paths.config_path();
         return rsx! {
             div { class: "load-error",
                 div { class: "brand", span { class: "brand__mark", "LI" } span { "Locked In" } }
                 section { h1 { "Configuration could not be loaded" }
                     p { "Locked In is running without active configuration and will not overwrite an existing configuration file. Correct the startup error, then restart the application." }
-                    pre { "{error}" }
-                    button { class: "button secondary", onclick: move |_| if let Ok(path) = config::config_path() { let _ = Command::new("notepad.exe").arg(path).spawn(); }, "Open config file" }
+                    pre { "{message}" }
+                    if config_path_available {
+                        button { class: "button secondary", onclick: move |_| { let _ = Command::new("notepad.exe").arg(&config_path).spawn(); }, "Open config file" }
+                    }
                 }
             }
         };

@@ -7,11 +7,7 @@ mod focused_window;
 mod hid;
 mod win;
 
-use std::{
-    io::Write,
-    path::Path,
-    sync::{Arc, LazyLock, OnceLock},
-};
+use std::{io::Write, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use dioxus::{
@@ -25,8 +21,6 @@ pub static CAPTURED_WINDOW_SIGNAL: GlobalSignal<Option<CapturedWindow>> = Signal
 pub static CAPTURE_ARMED_SIGNAL: GlobalSignal<bool> = Signal::global(|| false);
 pub static CAPTURE_GENERATION_SIGNAL: GlobalSignal<u64> = Signal::global(|| 0);
 pub static CAPTURE_TARGET_SIGNAL: GlobalSignal<Option<CaptureTarget>> = Signal::global(|| None);
-pub static CONFIG_REVISION_SIGNAL: GlobalSignal<u64> =
-    Signal::global(|| config_bootstrap().map_or(0, |bootstrap| bootstrap.revision));
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 pub static UNSAVED_ENTITY_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 
@@ -88,34 +82,23 @@ pub fn cancel_capture() {
     *CAPTURED_WINDOW_SIGNAL.write() = None;
 }
 
-struct ConfigBootstrap {
-    ui: config::Config,
-    revision: u64,
-    error: Option<String>,
-}
-
 struct InitialConfiguration {
     coordinator: Option<Arc<config::ConfigCoordinator>>,
     publication: Option<Arc<config::PublishedConfig>>,
-    bootstrap: ConfigBootstrap,
+    error: Option<String>,
+    config_path_available: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct ConfigurationLoadError {
+    pub(crate) message: String,
+    pub(crate) config_path_available: bool,
 }
 
 struct PreparedApplicationPaths {
     paths: config::ApplicationPaths,
     bootstrap_error: Option<String>,
 }
-
-static CONFIG_BOOTSTRAP: OnceLock<ConfigBootstrap> = OnceLock::new();
-
-fn config_bootstrap() -> Option<&'static ConfigBootstrap> {
-    CONFIG_BOOTSTRAP.get()
-}
-
-pub static CONFIG_SIGNAL: GlobalSignal<config::Config> = Signal::global(|| {
-    config_bootstrap().map_or_else(config::Config::default, |value| value.ui.clone())
-});
-pub static CONFIG_LOAD_ERROR: LazyLock<Option<String>> =
-    LazyLock::new(|| config_bootstrap().and_then(|value| value.error.clone()));
 
 fn install_panic_log(log_path: std::path::PathBuf) {
     std::panic::set_hook(Box::new(move |info| {
@@ -232,21 +215,15 @@ fn load_initial_configuration(
             InitialConfiguration {
                 coordinator: Some(coordinator),
                 publication: Some(publication.clone()),
-                bootstrap: ConfigBootstrap {
-                    ui: publication.editable().as_ref().clone(),
-                    revision: publication.revision(),
-                    error: None,
-                },
+                error: None,
+                config_path_available: true,
             }
         }
         Err(error) => InitialConfiguration {
             coordinator: None,
             publication: None,
-            bootstrap: ConfigBootstrap {
-                ui: config::Config::default(),
-                revision: 0,
-                error: Some(format!("Configuration could not be loaded: {error}")),
-            },
+            error: Some(format!("Configuration could not be loaded: {error}")),
+            config_path_available: true,
         },
     }
 }
@@ -259,11 +236,8 @@ fn initialize_configuration(
         Some(error) => InitialConfiguration {
             coordinator: None,
             publication: None,
-            bootstrap: ConfigBootstrap {
-                ui: config::Config::default(),
-                revision: 0,
-                error: Some(error.clone()),
-            },
+            error: Some(error.clone()),
+            config_path_available: false,
         },
         None => load(&prepared.paths),
     }
@@ -306,28 +280,22 @@ fn main() {
 
     let initial = initialize_configuration(&prepared_paths, |paths| {
         let store = Arc::new(config::ConfigStore::new(paths.config_path()));
-        if let Err(error) = config::initialize_facade(paths.clone(), store.clone()) {
-            InitialConfiguration {
-                coordinator: None,
-                publication: None,
-                bootstrap: ConfigBootstrap {
-                    ui: config::Config::default(),
-                    revision: 0,
-                    error: Some(format!("Application bootstrap failed: {error}")),
-                },
-            }
-        } else {
-            load_initial_configuration(store, Arc::new(WindowsStartWithWindows))
-        }
+        load_initial_configuration(store, Arc::new(WindowsStartWithWindows))
     });
     let coordinator = initial.coordinator;
     let publication = initial.publication;
-    let bootstrap_error = initial.bootstrap.error.clone();
-    let settings = initial.bootstrap.ui.settings.clone();
-    assert!(
-        CONFIG_BOOTSTRAP.set(initial.bootstrap).is_ok(),
-        "configuration bootstrap must be initialized once"
-    );
+    let bootstrap_error = initial.error;
+    let configuration_load_error = bootstrap_error
+        .clone()
+        .map(|message| ConfigurationLoadError {
+            message,
+            config_path_available: initial.config_path_available,
+        });
+    let settings = publication
+        .as_ref()
+        .map_or_else(config::Settings::default, |value| {
+            value.editable().settings.clone()
+        });
     app_log::set_level(settings.log_level);
     app_log::write("application started");
     if let Some(error) = &bootstrap_error {
@@ -398,6 +366,7 @@ fn main() {
         .with_context(coordinator.clone())
         .with_context(publication_subscription.clone())
         .with_context(paths.clone())
+        .with_context(configuration_load_error)
         .with_cfg(desktop_config)
         .launch(components::App);
     drop(foreground_hook);

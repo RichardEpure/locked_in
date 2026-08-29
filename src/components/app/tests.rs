@@ -103,8 +103,6 @@ fn startup_projection_applies_the_current_publication_after_a_subscription_race(
 
     let projected = projected.into_inner().unwrap();
     assert!(Arc::ptr_eq(&projected.publication, &current));
-    assert_eq!(projected.revision, current.revision());
-    assert_eq!(projected.editable, *current.editable().as_ref());
     assert_eq!(projected.log_level, LogLevel::Debug);
     assert!(matches!(
         projected.close_behavior,

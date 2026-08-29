@@ -27,17 +27,14 @@ impl ApplicationPaths {
         self.data_root.join(CONFIG_FILE)
     }
 
-    #[allow(dead_code)]
     pub fn log_directory(&self) -> PathBuf {
         self.data_root.join("logs")
     }
 
-    #[allow(dead_code)]
     pub fn panic_log_path(&self) -> PathBuf {
         self.data_root.join("panic.log")
     }
 
-    #[allow(dead_code)]
     pub fn webview_data_directory(&self) -> PathBuf {
         self.data_root.join("webview")
     }

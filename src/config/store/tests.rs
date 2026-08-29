@@ -107,7 +107,7 @@ fn missing_file_is_created_with_valid_default_config() {
     let store = ConfigStore::new(&path);
 
     assert_eq!(store.load().unwrap(), EditableConfig::default());
-    assert_eq!(store.path(), path);
+    assert_eq!(store.path, path);
     assert_eq!(
         encoding::decode(&fs::read_to_string(path).unwrap()).unwrap(),
         EditableConfig::default()
@@ -123,8 +123,8 @@ fn valid_file_loads_and_reload_reads_the_latest_bytes() {
     let store = ConfigStore::new(path);
 
     assert_eq!(store.load().unwrap(), EditableConfig::default());
-    fs::write(store.path(), encoding::encode(&changed_config()).unwrap()).unwrap();
-    assert_eq!(store.reload().unwrap(), changed_config());
+    fs::write(&store.path, encoding::encode(&changed_config()).unwrap()).unwrap();
+    assert_eq!(store.load().unwrap(), changed_config());
 }
 
 #[test]

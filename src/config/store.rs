@@ -40,11 +40,7 @@ impl ConfigStore {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn load(&self) -> Result<EditableConfig> {
+    pub(super) fn load(&self) -> Result<EditableConfig> {
         let _guard = self.lock()?;
         match fs::read_to_string(&self.path) {
             Ok(contents) => self.decode_and_validate(&contents),
@@ -55,16 +51,21 @@ impl ConfigStore {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn reload(&self) -> Result<EditableConfig> {
-        self.load()
-    }
-
-    pub fn save(&self, config: &EditableConfig) -> Result<()> {
+    pub(super) fn save(&self, config: &EditableConfig) -> Result<()> {
         let _guard = self.lock()?;
         let temporary = self.prepare_temporary(config)?;
         self.before_install();
         replace_file(temporary.path(), &self.path)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_for_test(&self) -> Result<EditableConfig> {
+        self.load()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_for_test(&self, config: &EditableConfig) -> Result<()> {
+        self.save(config)
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>> {

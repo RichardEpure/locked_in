@@ -17,6 +17,7 @@ pub struct ActiveConfig {
 pub struct ActiveDispatch<'a> {
     automation_name: &'a str,
     case_name: &'a str,
+    #[cfg(test)]
     action_label: &'a str,
     report: &'a [u8],
     destinations: &'a [Device],
@@ -53,6 +54,7 @@ enum ActiveTextCondition {
 
 #[derive(Debug, Clone)]
 struct ActiveAction {
+    #[cfg(test)]
     label: String,
     report: Box<[u8]>,
     destinations: Box<[Device]>,
@@ -97,6 +99,7 @@ impl ActiveConfig {
             dispatches.extend(actions.iter().map(|action| ActiveDispatch {
                 automation_name: &automation.name,
                 case_name,
+                #[cfg(test)]
                 action_label: &action.label,
                 report: &action.report,
                 destinations: &action.destinations,
@@ -115,6 +118,7 @@ impl<'a> ActiveDispatch<'a> {
         self.case_name
     }
 
+    #[cfg(test)]
     pub fn action_label(&self) -> &'a str {
         self.action_label
     }
@@ -271,6 +275,7 @@ fn compile_actions(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(ActiveAction {
+                #[cfg(test)]
                 label: action.label.clone(),
                 report: action.report.clone().into_boxed_slice(),
                 destinations: destinations.into_boxed_slice(),

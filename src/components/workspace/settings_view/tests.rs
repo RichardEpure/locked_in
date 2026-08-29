@@ -82,7 +82,10 @@ fn save_uses_the_displayed_revision_and_publishes_durable_settings() {
     assert_eq!(published.revision(), initial.revision() + 1);
     assert!(!published.editable().settings.close_to_tray);
     assert_eq!(published.editable().settings.log_level, LogLevel::Debug);
-    assert_eq!(store.load().unwrap(), *published.editable().as_ref());
+    assert_eq!(
+        store.load_for_test().unwrap(),
+        *published.editable().as_ref()
+    );
 }
 
 #[test]
@@ -91,7 +94,7 @@ fn reload_publishes_strict_external_settings_through_the_coordinator() {
     let initial = coordinator.current();
     let mut external = initial.editable().as_ref().clone();
     external.settings.start_minimized = false;
-    store.save(&external).unwrap();
+    store.save_for_test(&external).unwrap();
 
     let published = reload_settings(&coordinator).unwrap();
 
@@ -145,7 +148,10 @@ fn failed_startup_change_persists_confirmed_state_and_surfaces_a_warning() {
     assert!(!published.editable().settings.start_with_windows);
     assert!(!published.editable().settings.start_minimized);
     assert!(!published.editable().settings.close_to_tray);
-    assert_eq!(store.load().unwrap(), *published.editable().as_ref());
+    assert_eq!(
+        store.load_for_test().unwrap(),
+        *published.editable().as_ref()
+    );
     assert!(warning.contains("could not be enabled"));
     assert!(warning.contains("access denied"));
 }
@@ -155,7 +161,7 @@ fn reload_correction_warning_is_available_to_the_settings_ui() {
     let (_directory, store, startup, coordinator) = coordinator();
     let mut external = coordinator.current().editable().as_ref().clone();
     external.settings.start_with_windows = true;
-    store.save(&external).unwrap();
+    store.save_for_test(&external).unwrap();
     startup.push(StartWithWindowsOutcome::warning(
         false,
         "registration missing",

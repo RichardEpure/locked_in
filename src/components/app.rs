@@ -13,9 +13,9 @@ use dioxus::{
 };
 
 use crate::{
-    CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, FOCUSED_WINDOW_SIGNAL, app_log, arm_capture,
+    FOCUSED_WINDOW_SIGNAL, app_log, arm_capture,
     automation_runtime::AutomationRuntime,
-    config::{Config, LogLevel, PublishedConfig},
+    config::{LogLevel, PublishedConfig},
     win,
 };
 
@@ -147,8 +147,6 @@ pub(crate) fn App() -> Element {
 
 struct PublicationProjection {
     publication: Arc<PublishedConfig>,
-    editable: Config,
-    revision: u64,
     log_level: LogLevel,
     close_behavior: WindowCloseBehaviour,
 }
@@ -159,13 +157,13 @@ fn project_current_publication(
     publish: impl FnOnce(PublicationProjection),
 ) {
     let publication = receiver.borrow_and_update().clone();
-    let editable = publication.editable().as_ref().clone();
     let projection = PublicationProjection {
-        revision: publication.revision(),
-        log_level: editable.settings.log_level,
-        close_behavior: effective_close_behavior(editable.settings.close_to_tray, tray_available),
+        log_level: publication.editable().settings.log_level,
+        close_behavior: effective_close_behavior(
+            publication.editable().settings.close_to_tray,
+            tray_available,
+        ),
         publication,
-        editable,
     };
     publish(projection);
 }
@@ -177,8 +175,6 @@ fn apply_publication(
 ) {
     app_log::set_level(projection.log_level);
     window.set_close_behavior(projection.close_behavior);
-    *CONFIG_SIGNAL.write() = projection.editable;
-    *CONFIG_REVISION_SIGNAL.write() = projection.revision;
     publication.set(Some(projection.publication));
 }
 

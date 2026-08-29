@@ -88,18 +88,17 @@ fn strict_load_failure_is_visible_non_destructive_and_skips_startup_registration
 
     assert!(loaded.coordinator.is_none());
     assert!(loaded.publication.is_none());
-    assert_eq!(loaded.bootstrap.ui, config::Config::default());
-    assert_eq!(loaded.bootstrap.revision, 0);
-    assert!(loaded.bootstrap.error.as_deref().is_some_and(|error| {
+    assert!(loaded.error.as_deref().is_some_and(|error| {
         error.contains("Configuration could not be loaded")
             && error.contains("unsupported config version")
     }));
+    assert!(loaded.config_path_available);
     assert_eq!(startup.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read_to_string(config_path).unwrap(), invalid_source);
     assert!(initial_window_visible(
         false,
-        loaded.bootstrap.error.as_deref(),
-        &loaded.bootstrap.ui.settings,
+        loaded.error.as_deref(),
+        &config::Settings::default(),
     ));
 }
 
@@ -160,7 +159,8 @@ fn fallback_bootstrap_never_invokes_configuration_loading() {
     assert!(!loaded.load(Ordering::SeqCst));
     assert!(initial.coordinator.is_none());
     assert!(initial.publication.is_none());
-    assert!(initial.bootstrap.error.is_some());
+    assert!(initial.error.is_some());
+    assert!(!initial.config_path_available);
     assert!(!prepared.paths.config_path().exists());
 }
 
