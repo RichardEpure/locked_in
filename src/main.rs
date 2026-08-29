@@ -115,12 +115,30 @@ struct WindowsStartWithWindows;
 
 impl config::StartWithWindows for WindowsStartWithWindows {
     fn reconcile(&self, desired: bool) -> config::StartWithWindowsOutcome {
-        match win::set_start_with_windows(desired) {
-            Ok(()) => config::StartWithWindowsOutcome::confirmed(desired),
-            Err(error) => config::StartWithWindowsOutcome::unconfirmed(format!(
-                "Windows startup registration failed: {error:#}"
+        reconcile_start_with_windows(
+            desired,
+            win::set_start_with_windows,
+            win::start_with_windows_enabled,
+        )
+    }
+}
+
+fn reconcile_start_with_windows(
+    desired: bool,
+    apply: impl FnOnce(bool) -> Result<()>,
+    inspect: impl FnOnce() -> Result<bool>,
+) -> config::StartWithWindowsOutcome {
+    match apply(desired) {
+        Ok(()) => config::StartWithWindowsOutcome::confirmed(desired),
+        Err(apply_error) => match inspect() {
+            Ok(confirmed) => config::StartWithWindowsOutcome::warning(
+                confirmed,
+                format!("Windows startup registration failed: {apply_error:#}"),
+            ),
+            Err(inspect_error) => config::StartWithWindowsOutcome::unconfirmed(format!(
+                "Windows startup registration failed: {apply_error:#}; the applied state could not be confirmed: {inspect_error:#}"
             )),
-        }
+        },
     }
 }
 
@@ -338,12 +356,6 @@ fn main() {
         }
         None => None,
     };
-    let close_behaviour = if settings.close_to_tray {
-        dioxus::desktop::WindowCloseBehaviour::WindowHides
-    } else {
-        dioxus::desktop::WindowCloseBehaviour::WindowCloses
-    };
-
     let mut desktop_config = DesktopConfig::new()
         .with_window(
             WindowBuilder::new()
@@ -358,7 +370,7 @@ fn main() {
                 )),
         )
         .with_menu(None)
-        .with_close_behaviour(close_behaviour)
+        .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowCloses)
         .with_tray_icon_show_window_on_click(false);
     desktop_config = desktop_config.with_data_directory(paths.webview_data_directory());
 

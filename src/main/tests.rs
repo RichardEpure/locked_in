@@ -15,6 +15,37 @@ struct CountingStartup {
     calls: AtomicUsize,
 }
 
+#[test]
+fn startup_apply_failure_uses_the_confirmed_registry_state() {
+    let outcome =
+        reconcile_start_with_windows(true, |_| anyhow::bail!("access denied"), || Ok(false));
+
+    assert_eq!(
+        outcome.state,
+        config::StartWithWindowsState::Confirmed(false)
+    );
+    assert!(
+        outcome
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("access denied"))
+    );
+}
+
+#[test]
+fn startup_apply_and_registry_query_failure_is_unconfirmed() {
+    let outcome = reconcile_start_with_windows(
+        false,
+        |_| anyhow::bail!("delete failed"),
+        || anyhow::bail!("query failed"),
+    );
+
+    assert_eq!(outcome.state, config::StartWithWindowsState::Unconfirmed);
+    assert!(outcome.warning.as_deref().is_some_and(|warning| {
+        warning.contains("delete failed") && warning.contains("query failed")
+    }));
+}
+
 impl config::StartWithWindows for CountingStartup {
     fn reconcile(&self, desired: bool) -> config::StartWithWindowsOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);

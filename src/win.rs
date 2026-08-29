@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::{
     ffi::OsString,
     os::windows::ffi::OsStringExt,
@@ -10,10 +10,19 @@ pub use crate::focused_window::{FocusedWindow as WindowMetadata, ForegroundObser
 use tokio::sync::watch;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND},
-        System::Threading::{
-            CreateMutexW, OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-            QueryFullProcessImageNameW,
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, GetLastError,
+            HANDLE, HWND, WIN32_ERROR,
+        },
+        System::{
+            Registry::{
+                HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, RegCloseKey, RegOpenKeyExW,
+                RegQueryValueExW,
+            },
+            Threading::{
+                CreateMutexW, OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+                QueryFullProcessImageNameW,
+            },
         },
         UI::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
@@ -339,10 +348,7 @@ pub fn set_start_with_windows(enabled: bool) -> Result<()> {
             .args(["/f"])
             .status()?
     } else {
-        let query = std::process::Command::new("reg.exe")
-            .args(["query", key, "/v", value_name])
-            .status()?;
-        if !query.success() {
+        if !start_with_windows_enabled()? {
             return Ok(());
         }
         std::process::Command::new("reg.exe")
@@ -353,6 +359,69 @@ pub fn set_start_with_windows(enabled: bool) -> Result<()> {
         anyhow::bail!("Windows startup registration failed");
     }
     Ok(())
+}
+
+pub fn start_with_windows_enabled() -> Result<bool> {
+    startup_registry_value_exists(open_startup_registry_key, locked_in_startup_value_exists)
+}
+
+struct RegistryKey(HKEY);
+
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RegCloseKey(self.0);
+        }
+    }
+}
+
+fn open_startup_registry_key() -> Result<Option<RegistryKey>> {
+    let mut key = HKEY::default();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            None,
+            KEY_QUERY_VALUE,
+            &mut key,
+        )
+    };
+    match status {
+        ERROR_SUCCESS => Ok(Some(RegistryKey(key))),
+        ERROR_FILE_NOT_FOUND => Ok(None),
+        status => Err(registry_query_error("open the Windows Run key", status)),
+    }
+}
+
+fn locked_in_startup_value_exists(key: &RegistryKey) -> Result<bool> {
+    let mut size = 0;
+    let status =
+        unsafe { RegQueryValueExW(key.0, w!("LockedIn"), None, None, None, Some(&mut size)) };
+    match status {
+        ERROR_SUCCESS => Ok(true),
+        ERROR_FILE_NOT_FOUND => Ok(false),
+        status => Err(registry_query_error(
+            "query the LockedIn Windows Run value",
+            status,
+        )),
+    }
+}
+
+fn startup_registry_value_exists<K>(
+    open_key: impl FnOnce() -> Result<Option<K>>,
+    value_exists: impl FnOnce(&K) -> Result<bool>,
+) -> Result<bool> {
+    match open_key()? {
+        Some(key) => value_exists(&key),
+        None => Ok(false),
+    }
+}
+
+fn registry_query_error(operation: &str, status: WIN32_ERROR) -> anyhow::Error {
+    anyhow!(
+        "failed to {operation}: {}",
+        windows::core::Error::from(status)
+    )
 }
 
 unsafe extern "system" fn win_event_proc(

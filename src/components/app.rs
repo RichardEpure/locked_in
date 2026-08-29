@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use dioxus::{
     desktop::{
         WindowCloseBehaviour,
@@ -11,10 +13,13 @@ use dioxus::{
 };
 
 use crate::{
-    FOCUSED_WINDOW_SIGNAL, app_log, arm_capture, automation_runtime::AutomationRuntime, win,
+    CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, FOCUSED_WINDOW_SIGNAL, app_log, arm_capture,
+    automation_runtime::AutomationRuntime,
+    config::{Config, LogLevel, PublishedConfig},
+    win,
 };
 
-use super::{capture_shortcut::CaptureShortcut, workspace::Workspace};
+use super::{PublishedConfigContext, capture_shortcut::CaptureShortcut, workspace::Workspace};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -23,6 +28,10 @@ const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
 pub(crate) fn App() -> Element {
     let window = use_window();
     let runtime = consume_context::<AutomationRuntime>();
+    let publication_subscription =
+        consume_context::<Option<tokio::sync::watch::Receiver<Arc<PublishedConfig>>>>();
+    let publication = use_signal(|| None::<Arc<PublishedConfig>>);
+    use_context_provider(move || PublishedConfigContext::new(publication));
     let menu = Menu::new();
     let open_item = MenuItem::with_id("open", "Open Locked In", true, None);
     let capture_item = MenuItem::with_id("capture", "Capture focused window (F3)", true, None);
@@ -39,13 +48,41 @@ pub(crate) fn App() -> Element {
     {
         builder = builder.with_icon(icon);
     }
-    if menu_ready && let Ok(tray) = builder.build() {
-        provide_context(tray);
+    let tray_available = if menu_ready {
+        match builder.build() {
+            Ok(tray) => {
+                provide_context(tray);
+                true
+            }
+            Err(_) => false,
+        }
     } else {
+        false
+    };
+    if !tray_available {
         app_log::write("tray icon could not be created");
-        window.set_close_behavior(dioxus::desktop::WindowCloseBehaviour::WindowCloses);
         window.set_visible(true);
     }
+    use_future({
+        let window = window.clone();
+        move || {
+            let mut subscription = publication_subscription.clone();
+            let window = window.clone();
+            async move {
+                let Some(subscription) = subscription.as_mut() else {
+                    return;
+                };
+                project_current_publication(subscription, tray_available, |projection| {
+                    apply_publication(projection, &window, publication);
+                });
+                while subscription.changed().await.is_ok() {
+                    project_current_publication(subscription, tray_available, |projection| {
+                        apply_publication(projection, &window, publication);
+                    });
+                }
+            }
+        }
+    });
 
     use_muda_event_handler({
         let window = window.clone();
@@ -105,6 +142,51 @@ pub(crate) fn App() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         CaptureShortcut {}
         Workspace {}
+    }
+}
+
+struct PublicationProjection {
+    publication: Arc<PublishedConfig>,
+    editable: Config,
+    revision: u64,
+    log_level: LogLevel,
+    close_behavior: WindowCloseBehaviour,
+}
+
+fn project_current_publication(
+    receiver: &mut tokio::sync::watch::Receiver<Arc<PublishedConfig>>,
+    tray_available: bool,
+    publish: impl FnOnce(PublicationProjection),
+) {
+    let publication = receiver.borrow_and_update().clone();
+    let editable = publication.editable().as_ref().clone();
+    let projection = PublicationProjection {
+        revision: publication.revision(),
+        log_level: editable.settings.log_level,
+        close_behavior: effective_close_behavior(editable.settings.close_to_tray, tray_available),
+        publication,
+        editable,
+    };
+    publish(projection);
+}
+
+fn apply_publication(
+    projection: PublicationProjection,
+    window: &dioxus::desktop::DesktopContext,
+    mut publication: Signal<Option<Arc<PublishedConfig>>>,
+) {
+    app_log::set_level(projection.log_level);
+    window.set_close_behavior(projection.close_behavior);
+    *CONFIG_SIGNAL.write() = projection.editable;
+    *CONFIG_REVISION_SIGNAL.write() = projection.revision;
+    publication.set(Some(projection.publication));
+}
+
+fn effective_close_behavior(close_to_tray: bool, tray_available: bool) -> WindowCloseBehaviour {
+    if close_to_tray && tray_available {
+        WindowCloseBehaviour::WindowHides
+    } else {
+        WindowCloseBehaviour::WindowCloses
     }
 }
 

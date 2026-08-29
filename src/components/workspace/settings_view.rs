@@ -1,29 +1,51 @@
-use std::process::Command;
+use std::{process::Command, sync::Arc};
 
-use dioxus::{desktop::use_window, prelude::*};
+use dioxus::prelude::*;
 
 use crate::{
-    CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL, app_log,
-    automation_runtime::AutomationRuntime,
-    config::{self, LogLevel},
+    DIRTY_EDITOR_SIGNAL,
+    components::PublishedConfigContext,
+    config::{
+        self, ConfigCoordinator, ConfigCoordinatorError, ConfigWarning, LogLevel, PublishedConfig,
+        Settings,
+    },
 };
 
 #[component]
 pub(super) fn SettingsView() -> Element {
-    let runtime = consume_context::<AutomationRuntime>();
-    let window = use_window();
-    let reload_window = window.clone();
-    let reload_runtime = runtime.clone();
-    let save_runtime = runtime.clone();
-    let original = CONFIG_SIGNAL.read().settings.clone();
-    let previous_startup = original.start_with_windows;
-    let mut draft = use_signal(|| original.clone());
-    let mut message = use_signal(String::new);
-    let snapshot = draft();
-    let cancel_original = original.clone();
-    let effect_original = original.clone();
+    let coordinator = consume_context::<Option<Arc<ConfigCoordinator>>>()
+        .expect("settings require an available configuration coordinator");
+    let paths = consume_context::<config::ApplicationPaths>();
+    let publication_context = consume_context::<PublishedConfigContext>();
+    let published = publication_context
+        .current()
+        .expect("settings require a published configuration");
+    let initial = published.clone();
+    let mut base = use_signal(|| initial.clone());
+    let mut draft = use_signal(|| initial.editable().settings.clone());
+    let mut message = use_signal(|| None::<(&'static str, String)>);
+
     use_effect(move || {
-        if draft() != effect_original {
+        let Some(observed) = publication_context.current() else {
+            return;
+        };
+        let current_base = base.read();
+        let is_clean = *draft.read() == current_base.editable().settings;
+        if observed.revision() > current_base.revision() && is_clean {
+            let settings = observed.editable().settings.clone();
+            drop(current_base);
+            base.set(observed);
+            draft.set(settings);
+        }
+    });
+
+    let snapshot = draft();
+    let original = base.read().editable().settings.clone();
+    let expected_revision = base.read().revision();
+    let cancel_original = original.clone();
+    let publication_warning = config_warning_message(published.warnings());
+    use_effect(move || {
+        if draft() != base.read().editable().settings {
             *DIRTY_EDITOR_SIGNAL.write() = Some("settings".into());
         } else if DIRTY_EDITOR_SIGNAL.read().as_deref() == Some("settings") {
             *DIRTY_EDITOR_SIGNAL.write() = None;
@@ -34,6 +56,7 @@ pub(super) fn SettingsView() -> Element {
             *DIRTY_EDITOR_SIGNAL.write() = None;
         }
     });
+
     rsx! {
         section { class: "workspace settings-workspace",
             header { class: "workspace-header", div { div { class: "eyebrow", "APPLICATION" } h2 { "Settings" } p { "Startup, tray, configuration, and diagnostics" } } }
@@ -45,65 +68,159 @@ pub(super) fn SettingsView() -> Element {
                 }
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "Configuration" } p { "Open the TOML file, then reload changes from disk" } } }
                     div { class: "settings-actions",
-                        button { class: "button secondary", onclick: move |_| if let Ok(path) = config::config_path() { let _ = Command::new("notepad.exe").arg(path).spawn(); }, "Open config file" }
-                        button { class: "button secondary", onclick: move |_| match config::load() {
-                            Ok(config) => match crate::win::set_start_with_windows(config.settings.start_with_windows) {
-                                Ok(()) => {
-                                    app_log::set_level(config.settings.log_level);
-                                    reload_window.set_close_behavior(if config.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
-                                    draft.set(config.settings.clone());
-                                    reload_runtime
-                                        .replace_config(config.clone())
-                                        .expect("loaded configuration must compile");
-                                    *CONFIG_SIGNAL.write() = config;
-                                    *CONFIG_REVISION_SIGNAL.write() += 1;
+                        button { class: "button secondary", onclick: {
+                            let config_path = paths.config_path();
+                            move |_| { let _ = Command::new("notepad.exe").arg(&config_path).spawn(); }
+                        }, "Open config file" }
+                        button { class: "button secondary", onclick: {
+                            let coordinator = coordinator.clone();
+                            move |_| match reload_settings(&coordinator) {
+                                Ok(reloaded) => {
+                                    let warning = config_warning_message(reloaded.warnings());
+                                    let settings = reloaded.editable().settings.clone();
+                                    base.set(reloaded);
+                                    draft.set(settings);
                                     *DIRTY_EDITOR_SIGNAL.write() = None;
-                                    message.set("Configuration and runtime settings reloaded".into());
+                                    message.set(Some(match warning {
+                                        Some(warning) => ("message warning", warning),
+                                        None => ("message success", "Configuration reloaded".into()),
+                                    }));
                                 }
-                                Err(error) => message.set(format!("Reload failed while applying startup setting: {error}")),
-                            },
-                            Err(error) => message.set(format!("Reload failed: {error}")),
+                                Err(error) => {
+                                    message.set(Some(("message error", config_error_message(&error))));
+                                }
+                            }
                         }, "Reload from disk" }
                     }
                 }
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "03" } div { h3 { "Diagnostics" } p { "Choose log detail for automation and HID troubleshooting" } } }
                     div { class: "form-grid two", label { "Log level" select { value: log_level_name(snapshot.log_level), onchange: move |event| draft.write().log_level = parse_log_level(&event.value()), option { value: "error", "Error" } option { value: "info", "Info" } option { value: "debug", "Debug" } } }
-                        div { class: "settings-actions align-end", button { class: "button secondary", onclick: move |_| if let Ok(path) = app_log::log_directory() { let _ = Command::new("explorer.exe").arg(path).spawn(); }, "Open log folder" } }
+                        div { class: "settings-actions align-end", button { class: "button secondary", onclick: {
+                            let log_directory = paths.log_directory();
+                            move |_| { let _ = Command::new("explorer.exe").arg(&log_directory).spawn(); }
+                        }, "Open log folder" } }
                     }
                 }
             }
-            footer { class: "save-bar", span { class: "message success", "{message}" }
+            footer { class: "save-bar",
+                if let Some((class, text)) = message() {
+                    span { class, role: "status", aria_live: "polite", "{text}" }
+                } else if let Some(warning) = publication_warning {
+                    span { class: "message warning", role: "status", "{warning}" }
+                }
                 div { class: "toolbar",
-                button { class: "button ghost", disabled: snapshot == original, onclick: move |_| { draft.set(cancel_original.clone()); *DIRTY_EDITOR_SIGNAL.write() = None; }, "Cancel" }
-                button { class: "button primary", disabled: snapshot == original, onclick: move |_| {
-                    let mut next = CONFIG_SIGNAL.read().clone(); next.settings = draft();
-                    if let Err(error) = crate::win::set_start_with_windows(next.settings.start_with_windows) {
-                        message.set(format!("Startup setting failed: {error}"));
-                    } else {
-                        match config::save(&next) {
-                            Ok(()) => {
-                                app_log::set_level(next.settings.log_level);
-                                window.set_close_behavior(if next.settings.close_to_tray { dioxus::desktop::WindowCloseBehaviour::WindowHides } else { dioxus::desktop::WindowCloseBehaviour::WindowCloses });
-                                save_runtime
-                                    .replace_config(next.clone())
-                                    .expect("saved configuration must compile");
-                                *CONFIG_SIGNAL.write() = next;
+                    button { class: "button ghost", disabled: snapshot == original, onclick: move |_| { draft.set(cancel_original.clone()); *DIRTY_EDITOR_SIGNAL.write() = None; message.set(None); }, "Cancel" }
+                    button { class: "button primary", disabled: snapshot == original, onclick: {
+                        let coordinator = coordinator.clone();
+                        move |_| match save_settings(&coordinator, expected_revision, draft()) {
+                            Ok(saved) => {
+                                let warning = config_warning_message(saved.warnings());
+                                let settings = saved.editable().settings.clone();
+                                base.set(saved);
+                                draft.set(settings);
                                 *DIRTY_EDITOR_SIGNAL.write() = None;
-                                message.set("Settings saved".into());
+                                message.set(Some(match warning {
+                                    Some(warning) => ("message warning", warning),
+                                    None => ("message success", "Settings saved".into()),
+                                }));
                             }
                             Err(error) => {
-                                match crate::win::set_start_with_windows(previous_startup) {
-                                    Ok(()) => message.set(format!("Save failed: {error}")),
-                                    Err(rollback_error) => message.set(format!("Save failed: {error}; startup rollback also failed: {rollback_error}")),
+                                if matches!(error, ConfigCoordinatorError::StaleRevision { .. }) {
+                                    base.set(coordinator.current());
                                 }
+                                message.set(Some(("message error", config_error_message(&error))));
                             }
                         }
-                    }
-                }, "Save settings" }
+                    }, "Save settings" }
                 }
             }
         }
     }
+}
+
+fn save_settings(
+    coordinator: &ConfigCoordinator,
+    expected_revision: u64,
+    settings: Settings,
+) -> Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
+    coordinator.update(expected_revision, move |current| {
+        let mut candidate = current.clone();
+        candidate.settings = settings;
+        candidate
+    })
+}
+
+fn reload_settings(
+    coordinator: &ConfigCoordinator,
+) -> Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
+    coordinator.reload()
+}
+
+fn config_error_message(error: &ConfigCoordinatorError) -> String {
+    match config_warning_message(error.warnings()) {
+        Some(warning) => format!("{error}. {warning}"),
+        None => error.to_string(),
+    }
+}
+
+fn config_warning_message(warnings: &[ConfigWarning]) -> Option<String> {
+    let messages = warnings
+        .iter()
+        .map(|warning| match warning {
+            ConfigWarning::StartWithWindows {
+                desired,
+                confirmed,
+                message,
+            } => {
+                let action = if *desired { "enabled" } else { "disabled" };
+                let outcome = if *confirmed == Some(*desired) {
+                    format!("Start with Windows was {action} with a warning")
+                } else {
+                    format!("Start with Windows could not be {action}")
+                };
+                let confirmed = confirmed.map_or_else(
+                    || "The applied state could not be confirmed".to_string(),
+                    |confirmed| {
+                        format!(
+                            "The confirmed setting is {}",
+                            if confirmed { "enabled" } else { "disabled" }
+                        )
+                    },
+                );
+                let detail = message
+                    .as_deref()
+                    .map_or_else(String::new, |message| format!(": {message}"));
+                format!("{outcome}. {confirmed}{detail}")
+            }
+            ConfigWarning::StartWithWindowsRollback {
+                target,
+                attempted,
+                confirmed,
+                message,
+            } => {
+                let target = if *target { "enabled" } else { "disabled" };
+                let attempt = if *attempted {
+                    format!("Rollback to {target} was attempted")
+                } else {
+                    format!("The setting remained {target}")
+                };
+                let confirmed = confirmed.map_or_else(
+                    || "but the applied state could not be confirmed".to_string(),
+                    |confirmed| {
+                        format!(
+                            "and the confirmed setting is {}",
+                            if confirmed { "enabled" } else { "disabled" }
+                        )
+                    },
+                );
+                let detail = message
+                    .as_deref()
+                    .map_or_else(String::new, |message| format!(": {message}"));
+                format!("{attempt} {confirmed}{detail}")
+            }
+        })
+        .collect::<Vec<_>>();
+    (!messages.is_empty()).then(|| messages.join(" "))
 }
 
 fn log_level_name(level: LogLevel) -> &'static str {
@@ -121,3 +238,7 @@ fn parse_log_level(value: &str) -> LogLevel {
         _ => LogLevel::Info,
     }
 }
+
+#[cfg(test)]
+#[path = "settings_view/tests.rs"]
+mod tests;

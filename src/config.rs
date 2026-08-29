@@ -76,10 +76,6 @@ fn config_store() -> Result<&'static ConfigStore> {
     Ok(&facade()?.store)
 }
 
-pub fn load() -> Result<Config> {
-    config_store()?.load()
-}
-
 pub fn save(config: &Config) -> Result<()> {
     config_store()?.save(config)
 }
