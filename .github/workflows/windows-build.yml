@@ -123,12 +123,16 @@ jobs:
         shell: pwsh
         env:
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
           INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
         run: |
           @(
             "## Windows installer candidate",
             "",
+            "[Download Windows installer artifact]($env:ARTIFACT_URL)",
+            "",
             "- Artifact ID: ``$env:ARTIFACT_ID``",
             "- Commit: ``$env:GITHUB_SHA``",
-            "- Installer SHA-256: ``$env:INSTALLER_SHA256``"
+            "- Installer SHA-256: ``$env:INSTALLER_SHA256``",
+            "- Retention: 30 days"
           ) | Add-Content $env:GITHUB_STEP_SUMMARY
