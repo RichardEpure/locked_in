@@ -149,7 +149,9 @@ pub(super) fn Workspace() -> Element {
                 Section::Devices => rsx! { DevicesView { selected: selected_device } },
                 Section::Settings => rsx! { SettingsView {} },
             }
-            if CAPTURED_WINDOW_SIGNAL.read().is_some() && CAPTURE_TARGET_SIGNAL.read().is_none() {
+            if CAPTURED_WINDOW_SIGNAL.read().as_ref().is_some_and(|captured|
+                captured.belongs_to(*crate::CAPTURE_GENERATION_SIGNAL.read(), &None)
+            ) && CAPTURE_TARGET_SIGNAL.read().is_none() {
                 CaptureDialog {}
             }
         }

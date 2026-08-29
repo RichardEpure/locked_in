@@ -1,23 +1,33 @@
 use dioxus::prelude::*;
 
 use crate::{
-    CAPTURE_TARGET_SIGNAL, CONFIG_REVISION_SIGNAL, CONFIG_SIGNAL, DIRTY_EDITOR_SIGNAL,
-    UNSAVED_ENTITY_SIGNAL, config::Automation,
+    CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, config::Automation,
 };
 
 use crate::components::workspace::empty_state::EmptyState;
 use crate::components::workspace::selection::SelectionProps;
 
-use super::automation_editor::AutomationEditor;
+use super::{
+    automation_editor::AutomationEditor, publication::new_automation, use_config_publication,
+};
 
 #[component]
 pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -> Element {
     let mut selected = props.selected;
     let mut query = use_signal(String::new);
     let pending_delete = use_signal(|| None::<String>);
-    let automations = CONFIG_SIGNAL.read().automations.clone();
+    let mut pending_draft = use_signal(|| None::<Automation>);
+    let (_coordinator, publication) = use_config_publication();
+    let published = publication.read().clone();
+    let mut automations = published.editable().automations.clone();
+    if let Some(pending) = pending_draft.read().clone()
+        && !automations
+            .iter()
+            .any(|automation| automation.id == pending.id)
+    {
+        automations.push(pending);
+    }
     let normalized_query = query().to_lowercase();
-    let revision = *CONFIG_REVISION_SIGNAL.read();
     let navigation_locked =
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
 
@@ -32,11 +42,12 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
                     title: "New automation (Ctrl+N)",
                     disabled: navigation_locked,
                     onclick: move |_| {
-                        let mut config = CONFIG_SIGNAL.read().clone();
-                        let id = config.next_id("automation");
-                        config.automations.push(Automation { id: id.clone(), ..Automation::default() });
-                        *CONFIG_SIGNAL.write() = config;
-                        *UNSAVED_ENTITY_SIGNAL.write() = Some(format!("automation:{id}"));
+                        let automation = new_automation(&publication.read());
+                        let id = automation.id.clone();
+                        pending_draft.set(Some(automation));
+                        let token = format!("automation:{id}");
+                        *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
+                        *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                         selected.set(Some(id));
                     },
                     "+"
@@ -68,7 +79,7 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
         section {
             class: "workspace",
             if let Some(id) = selected().filter(|id| automations.iter().any(|automation| automation.id == *id)) {
-                AutomationEditor { key: "{id}-{revision}", id, selected, pending_delete }
+                AutomationEditor { key: "{id}", id, selected, pending_delete, pending_draft, publication }
             } else {
                 EmptyState { title: "Select an automation", copy: "Create or select an automation to configure its event, ordered cases, and report routes." }
             }
