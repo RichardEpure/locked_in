@@ -10,7 +10,8 @@
         "css:build:release": "sass --style=compressed --no-source-map assets/styles/main.scss assets/styles/main.css",
         "css:watch": "sass --no-source-map --watch assets/styles/main.scss assets/styles/main.css",
         "bundle": "npm run css:build:release && dx bundle --desktop --release --locked",
-        "test": "npm run css:build && cargo test --locked"
+        "test": "npm run css:build && cargo test --locked",
+        "verify": "cargo fmt --all --check && npm test && cargo clippy --locked --all-targets -- -D warnings && npm run bundle"
     },
     "repository": {
         "type": "git",
