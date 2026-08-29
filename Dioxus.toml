@@ -18,9 +18,12 @@ script = []
 script = []
 
 [bundle]
-identifier = "com.richardepure.lockedin"
+identifier = "LockedIn.LockedIn"
 publisher = "richard"
 icon = ["assets/favicon.ico"]
 
 [bundle.windows]
 icon_path = "assets/favicon.ico"
+
+[bundle.windows.nsis]
+installer_hooks = "installer/nsis-hooks.nsh"
