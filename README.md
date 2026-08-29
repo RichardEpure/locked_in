@@ -95,6 +95,25 @@ never interrupted.
 ## Build
 Run `npm run bundle` to generate compressed CSS and create a locked release desktop bundle.
 
+## Windows artifacts and releases
+The `Windows build` GitHub Actions workflow runs repository verification and creates a
+locked Windows installer for pull requests, pushes to any branch, and manually
+requested builds. Tag pushes do not trigger builds. Successful runs retain an immutable
+`windows-installer-<run-id>-<run-attempt>` artifact for 30 days. It contains the
+installer, its SHA-256 checksum, and a provenance manifest identifying the source
+commit and version. The workflow summary reports the immutable artifact ID and
+installer checksum that identify a candidate for validation.
+
+A successful build never creates a tag or GitHub release. After an installer has been
+validated, run the separate `Windows release` workflow from `main` with its build run
+artifact ID, Cargo-derived tag, and either `prerelease` or `stable`. The workflow
+runs trusted publication logic from `main`, verifies the selected build's source commit,
+version, and checksum, creates the tag at that commit, and publishes that exact
+installer. The selected build may come from any pushed branch or manual build, including
+an older commit. Releases made from an unsigned installer include a warning that Windows
+or Microsoft Defender SmartScreen may warn before installation. If publication fails
+after creating the tag, inspect and clean up the partial tag or release before retrying.
+
 ## Develop
 Run `npm run dev` to generate development CSS, watch Sass imports, and serve the desktop app.
 

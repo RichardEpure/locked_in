@@ -1,0 +1,132 @@
+name: Windows build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-bundle:
+    name: Verify and bundle
+    runs-on: windows-2025
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+
+      - name: Select Rust toolchain
+        run: rustup default 1.98.0
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Install locked Dioxus CLI
+        run: cargo install dioxus-cli --version 0.7.10 --locked
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Run locked tests
+        run: npm test
+
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Create locked Windows bundle
+        run: npm run bundle
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Prepare Windows installer
+        id: installer
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo metadata failed."
+          }
+
+          $rootManifest = (Resolve-Path "Cargo.toml").Path
+          $packages = @($metadata.packages | Where-Object {
+            [IO.Path]::GetFullPath($_.manifest_path) -eq $rootManifest
+          })
+          if ($packages.Count -ne 1) {
+            throw "Could not identify the root Cargo package."
+          }
+
+          $version = [string]$packages[0].version
+          $installerName = "LockedIn_${version}_x64-setup.exe"
+          $bundleDirectory = "target/dx/$($packages[0].name)/bundle/windows/nsis"
+          $installers = @(Get-ChildItem $bundleDirectory -File -Filter "*-setup.exe")
+          if ($installers.Count -ne 1 -or $installers[0].Name -cne $installerName) {
+            throw "Expected exactly one installer named '$installerName'."
+          }
+
+          $artifactDirectory = "$env:RUNNER_TEMP/windows-installer"
+          New-Item -ItemType Directory -Path $artifactDirectory | Out-Null
+          $installerPath = Join-Path $artifactDirectory $installerName
+          Copy-Item $installers[0].FullName $installerPath
+
+          $signatureStatus = (Get-AuthenticodeSignature $installerPath).Status.ToString()
+          if ($signatureStatus -notin @("NotSigned", "Valid")) {
+            throw "Installer Authenticode status is '$signatureStatus'."
+          }
+
+          $sha256 = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumName = "$installerName.sha256"
+          "$sha256  $installerName" | Set-Content `
+            (Join-Path $artifactDirectory $checksumName) `
+            -Encoding utf8NoBOM
+
+          [ordered]@{
+            schemaVersion = 1
+            commitSha = $env:GITHUB_SHA
+            version = $version
+            installerFile = $installerName
+            checksumFile = $checksumName
+            sha256 = $sha256
+            signatureStatus = $signatureStatus
+          } | ConvertTo-Json | Set-Content `
+            (Join-Path $artifactDirectory "windows-release-manifest.json") `
+            -Encoding utf8NoBOM
+
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Retain Windows installer
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-installer/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report installer identity
+        shell: pwsh
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
+        run: |
+          @(
+            "## Windows installer candidate",
+            "",
+            "- Artifact ID: ``$env:ARTIFACT_ID``",
+            "- Commit: ``$env:GITHUB_SHA``",
+            "- Installer SHA-256: ``$env:INSTALLER_SHA256``"
+          ) | Add-Content $env:GITHUB_STEP_SUMMARY
