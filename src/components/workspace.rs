@@ -1,6 +1,7 @@
 use std::process::Command;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Settings, Usb, Workflow};
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, ConfigurationLoadError, DIRTY_EDITOR_SIGNAL,
@@ -141,23 +142,26 @@ pub(super) fn Workspace() -> Element {
                 div { class: "brand", span { class: "brand__mark", "LI" } span { "Locked In" } }
                 button {
                     class: if section() == Section::Automations { "nav-item active" } else { "nav-item" },
+                    aria_label: "Automations",
                     disabled: navigation_locked && section() != Section::Automations,
                     onclick: move |_| section.set(Section::Automations),
-                    span { class: "nav-item__icon", "A" }
+                    span { class: "nav-item__icon", Workflow { size: 15, "aria-hidden": "true" } }
                     span { class: "nav-item__label", "Automations" }
                 }
                 button {
                     class: if section() == Section::Devices { "nav-item active" } else { "nav-item" },
+                    aria_label: "Devices",
                     disabled: navigation_locked && section() != Section::Devices,
                     onclick: move |_| section.set(Section::Devices),
-                    span { class: "nav-item__icon", "D" }
+                    span { class: "nav-item__icon", Usb { size: 15, "aria-hidden": "true" } }
                     span { class: "nav-item__label", "Devices" }
                 }
                 button {
                     class: if section() == Section::Settings { "nav-item active" } else { "nav-item" },
+                    aria_label: "Settings",
                     disabled: navigation_locked && section() != Section::Settings,
                     onclick: move |_| section.set(Section::Settings),
-                    span { class: "nav-item__icon", "S" }
+                    span { class: "nav-item__icon", Settings { size: 15, "aria-hidden": "true" } }
                     span { class: "nav-item__label", "Settings" }
                 }
                 div {

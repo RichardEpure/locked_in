@@ -8,6 +8,7 @@ license = "AGPL-3.0-only"
 [dependencies]
 hidapi = "2.6.3"
 dioxus = { version = "=0.7.10", features = [] }
+dioxus-icons = "0.1.0"
 # dioxus = { path = "../dioxus/packages/dioxus", features = [] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = { version = "0.9.10", features = ["serde"] }

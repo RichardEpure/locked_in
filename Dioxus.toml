@@ -21,6 +21,7 @@ script = []
 identifier = "LockedIn.LockedIn"
 publisher = "richard"
 icon = ["assets/favicon.ico"]
+resources = ["THIRD_PARTY_LICENSES.txt"]
 
 [bundle.windows]
 icon_path = "assets/favicon.ico"

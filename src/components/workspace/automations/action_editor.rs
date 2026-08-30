@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::Trash2;
 
 use crate::{
     automation_runtime::{AutomationRuntime, TestDispatchResult},
@@ -89,7 +90,7 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                         });
                     }
                 }, "Test" }
-                button { class: "icon-button danger", title: "Remove action", onclick: move |_| remove_action(&mut draft, props.case_index, props.action_index), "×" }
+                button { class: "icon-button danger", aria_label: "Remove action", title: "Remove action", onclick: move |_| remove_action(&mut draft, props.case_index, props.action_index), Trash2 { size: 16, "aria-hidden": "true" } }
             }
             div { class: "action-fields",
                 label { "Report (hex)" div { class: if parsed_report.is_ok() { "hex-input" } else { "hex-input invalid" }, span { "0x" } input { value: "{report_text}", placeholder: "87", oninput: move |event| {

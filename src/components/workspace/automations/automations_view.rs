@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Plus, Search};
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, config::Automation,
@@ -50,14 +51,18 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
                         *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                         selected.set(Some(id));
                     },
-                    "+"
+                    Plus { size: 16, "aria-hidden": "true" }
                 }
             }
-            input {
-                class: "search",
-                placeholder: "Search automations",
-                value: "{query}",
-                oninput: move |event| query.set(event.value()),
+            div {
+                class: "search-field",
+                Search { size: 15, "aria-hidden": "true" }
+                input {
+                    class: "search",
+                    placeholder: "Search automations",
+                    value: "{query}",
+                    oninput: move |event| query.set(event.value()),
+                }
             }
             div {
                 class: "entity-list__items",

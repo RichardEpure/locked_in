@@ -26,5 +26,9 @@
     gap: 5px;
     align-items: center;
     justify-content: center;
-    font-size: 0.8rem;
+
+    svg {
+        color: var(--text-muted);
+        pointer-events: none;
+    }
 }

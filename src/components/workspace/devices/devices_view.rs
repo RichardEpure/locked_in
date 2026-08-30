@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{ChevronDown, ChevronRight, Plus, Search};
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
@@ -159,9 +160,12 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
                     *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
                     *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                     selected.set(Some(id));
-                }, "+" }
+                }, Plus { size: 16, "aria-hidden": "true" } }
             }
-            input { class: "search", placeholder: "Search devices", value: "{query}", oninput: move |event| query.set(event.value()) }
+            div { class: "search-field",
+                Search { size: 15, "aria-hidden": "true" }
+                input { class: "search", placeholder: "Search devices", value: "{query}", oninput: move |event| query.set(event.value()) }
+            }
             button {
                 class: "discovery-refresh",
                 disabled: refresh_pending,
@@ -182,7 +186,9 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
                         aria_expanded: discovery_open(),
                         aria_controls: "connected-interface-list",
                         onclick: move |_| { let open = discovery_open(); discovery_open.set(!open); },
-                        span { class: "disclosure-icon", aria_hidden: true, if discovery_open() { "v" } else { ">" } }
+                        span { class: "disclosure-icon", aria_hidden: true,
+                            if discovery_open() { ChevronDown { size: 13 } } else { ChevronRight { size: 13 } }
+                        }
                         "Discovered interfaces"
                     }
                     if discovery_open() {

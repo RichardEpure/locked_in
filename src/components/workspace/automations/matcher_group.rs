@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{ChevronDown, ChevronRight, Plus};
 
 use crate::{
     CAPTURE_ARMED_SIGNAL, CAPTURE_TARGET_SIGNAL, CaptureTarget, arm_capture, cancel_capture,
@@ -66,7 +67,9 @@ pub(super) fn MatcherGroup(props: MatcherGroupProps) -> Element {
                                 groups.insert(group_key.clone());
                             }
                         },
-                        span { class: "disclosure-icon", aria_hidden: true, if collapsed { ">" } else { "v" } }
+                        span { class: "disclosure-icon", aria_hidden: true,
+                            if collapsed { ChevronRight { size: 13 } } else { ChevronDown { size: 13 } }
+                        }
                         span { "{title}" }
                         span { class: "matcher-count", "{props.matchers.len()}" }
                     }
@@ -82,7 +85,7 @@ pub(super) fn MatcherGroup(props: MatcherGroupProps) -> Element {
                         collapsed_matcher_groups.write().remove(&(add_case_id.clone(), exceptions));
                         add_matcher(&mut draft, case_index, exceptions);
                         reveal_last_matcher(case_index, exceptions);
-                    }, "+ Add matcher" }
+                    }, Plus { size: 15, "aria-hidden": "true" } "Add matcher" }
                 }
             }
             if capture_armed {

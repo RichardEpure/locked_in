@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::X;
 
 use crate::{
     CAPTURE_GENERATION_SIGNAL, CAPTURED_WINDOW_SIGNAL, DIRTY_EDITOR_SIGNAL, cancel_capture,
@@ -40,7 +41,7 @@ pub(super) fn CaptureDialog() -> Element {
         div { class: "modal-backdrop",
             section { class: "capture-dialog",
                 header { div { div { class: "eyebrow", "CAPTURED WINDOW" } h2 { "Assign matcher" } p { "Review the captured metadata, then choose an automation case." } }
-                    button { class: "icon-button", aria_label: "Close", onclick: move |_| cancel_capture(), "×" }
+                    button { class: "icon-button", aria_label: "Close", onclick: move |_| cancel_capture(), X { size: 16, "aria-hidden": "true" } }
                 }
                 div { class: "capture-metadata",
                     div { span { "Title" } code { "{title}" } }

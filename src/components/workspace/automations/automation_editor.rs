@@ -1,6 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{AppWindow, Plus};
 
 use crate::{
     CAPTURE_ARMED_SIGNAL, CAPTURE_GENERATION_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL,
@@ -189,7 +190,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             class: "workspace-header",
             div {
                 div { class: "eyebrow", "FOCUSED WINDOW AUTOMATION" }
-                h2 { "{snapshot.name}" if dirty { span { class: "dirty-dot", title: "Unsaved changes", "•" } } }
+                h2 { "{snapshot.name}" if dirty { span { class: "dirty-dot", title: "Unsaved changes", aria_hidden: true, "•" } span { class: "visually-hidden", "Unsaved changes" } } }
                 p { "First matching case runs. Otherwise is used only when no case matches." }
             }
             div { class: "toolbar",
@@ -256,11 +257,11 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             }
             section { class: "editor-card trigger-card",
                 div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "This automation runs when focus moves to another window" } } }
-                div { class: "trigger-summary", span { class: "trigger-icon", "W" } div { strong { "Focused window changes" } small { "Match title, class, and executable details in the cases below" } } span { class: "pill", "Windows" } }
+                div { class: "trigger-summary", span { class: "trigger-icon", AppWindow { size: 18, "aria-hidden": "true" } } div { strong { "Focused window changes" } small { "Match title, class, and executable details in the cases below" } } span { class: "pill", "Windows" } }
             }
             section { class: "editor-card",
                 div { class: "section-heading split", span { class: "step", "03" } div { h3 { "Cases" } p { "Evaluated from top to bottom; first match wins" } }
-                    button { class: "button secondary", onclick: move |_| add_case(&mut draft), "+ Add case" }
+                    button { class: "button secondary", onclick: move |_| add_case(&mut draft), Plus { size: 16, "aria-hidden": "true" } "Add case" }
                 }
                 if snapshot.cases.is_empty() {
                     div { class: "inline-empty", "No cases yet. Add a case or use an Otherwise action." }
@@ -271,7 +272,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             }
             section { class: "editor-card otherwise-card",
                 div { class: "section-heading split", span { class: "step muted", "ELSE" } div { h3 { "Otherwise" } p { "Runs only when no case matches" } }
-                    button { class: "button secondary", onclick: move |_| add_action(&mut draft, None), "+ Add action" }
+                    button { class: "button secondary", onclick: move |_| add_action(&mut draft, None), Plus { size: 16, "aria-hidden": "true" } "Add action" }
                 }
                 for (action_index, action) in snapshot.otherwise_actions.iter().cloned().enumerate() {
                     ActionEditor { key: "{action.id}", draft, case_index: None, action_index, action, publication }

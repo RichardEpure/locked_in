@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::CaseSensitive;
 
 use crate::config::{Automation, MatchOperator, TextCondition};
 
@@ -42,7 +43,7 @@ pub(super) fn ConditionRow(props: ConditionRowProps) -> Element {
                 option { value: "regex", "regex" }
             }
             input { placeholder: "Not used", value: "{value}", oninput: move |event| update_condition(&mut draft, &value_props, None, Some(event.value()), None) }
-            label { class: "case-check", input { type: "checkbox", checked: case_sensitive, onchange: move |event| update_condition(&mut draft, &case_props, None, None, Some(event.checked())) } "Aa" }
+            label { class: "case-check", title: "Case sensitive", input { type: "checkbox", aria_label: "Case sensitive", checked: case_sensitive, onchange: move |event| update_condition(&mut draft, &case_props, None, None, Some(event.checked())) } CaseSensitive { size: 16, "aria-hidden": "true" } }
         }
     }
 }
