@@ -8,7 +8,8 @@ use std::{
 
 use super::{
     AutomationRuntime, FocusGenerationProgress, FocusSourceState, HidRefreshRequestResult,
-    ORDINARY_COMMAND_CAPACITY, RuntimeOwner, RuntimePhase, RuntimeRequestError, TestDispatchResult,
+    ORDINARY_COMMAND_CAPACITY, RuntimeOwner, RuntimePhase, RuntimeRequestError, RuntimeStatus,
+    TestDispatchResult,
 };
 use crate::{
     config::{
@@ -18,6 +19,124 @@ use crate::{
     focused_window::{FocusedWindow, ForegroundObservation},
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
 };
+
+pub(super) struct ClaimGate {
+    started: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+impl AutomationRuntime {
+    fn start(
+        initial_config: Option<Config>,
+        focus_events: tokio::sync::watch::Receiver<ForegroundObservation>,
+        focus_source: FocusSourceState,
+        backend: impl HidBackend,
+    ) -> anyhow::Result<(Self, RuntimeOwner)> {
+        let initial_config = initial_config
+            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
+            .transpose()
+            .map_err(format_compilation_errors)?;
+        Self::start_active(initial_config, focus_events, focus_source, backend)
+    }
+
+    fn start_with_initialization_claim_gate(
+        initial_config: Option<Config>,
+        focus_events: tokio::sync::watch::Receiver<ForegroundObservation>,
+        focus_source: FocusSourceState,
+        backend: impl HidBackend,
+    ) -> anyhow::Result<(Self, RuntimeOwner, mpsc::Receiver<()>, mpsc::Sender<()>)> {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let initial_config = initial_config
+            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
+            .transpose()
+            .map_err(format_compilation_errors)?;
+        let (runtime, owner) = Self::start_active_inner(
+            initial_config,
+            focus_events,
+            focus_source,
+            backend,
+            Some(ClaimGate {
+                started: started_tx,
+                release: release_rx,
+            }),
+        )?;
+        Ok((runtime, owner, started_rx, release_tx))
+    }
+
+    pub(crate) fn active_config_snapshot(&self) -> Option<Arc<ActiveConfig>> {
+        self.shared
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn status(&self) -> RuntimeStatus {
+        self.shared.status.borrow().clone()
+    }
+
+    fn hid_inventory(&self) -> Arc<HidInventory> {
+        self.shared.hid_inventory.borrow().clone()
+    }
+
+    pub(super) fn wait_before_initialization_claim(&self) {
+        let gate = self
+            .shared
+            .initialization_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
+    }
+
+    fn gate_next_focus_boundary_claim(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self
+            .shared
+            .boundary_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ClaimGate {
+            started: started_tx,
+            release: release_rx,
+        });
+        (started_rx, release_tx)
+    }
+
+    pub(super) fn wait_before_focus_boundary_claim(&self) {
+        let gate = self
+            .shared
+            .boundary_claim_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
+    }
+
+    fn status_history(&self) -> Vec<RuntimeStatus> {
+        self.shared
+            .status_history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+fn format_compilation_errors(errors: Vec<ValidationError>) -> anyhow::Error {
+    let details = errors
+        .iter()
+        .map(|error| format!("{}: {}", error.path, error.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    anyhow::anyhow!("configuration could not be activated: {details}")
+}
 
 fn replace_config_for_test(
     runtime: &AutomationRuntime,

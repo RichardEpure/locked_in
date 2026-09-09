@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[cfg(test)]
-use crate::config::{Config, ValidationError};
+use tests::ClaimGate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FocusSourceState {
@@ -157,11 +157,6 @@ enum BoundaryClaim {
     Wait,
 }
 
-struct ClaimGate {
-    started: std::sync::mpsc::Sender<()>,
-    release: std::sync::mpsc::Receiver<()>,
-}
-
 struct Shared {
     config: RwLock<Option<Arc<ActiveConfig>>>,
     latest_focus: watch::Receiver<ForegroundObservation>,
@@ -174,6 +169,7 @@ struct Shared {
     commands: mpsc::Sender<RuntimeCommand>,
     shutdown: watch::Sender<bool>,
     admission: Mutex<Admission>,
+    #[cfg(test)]
     initialization_claim_gate: Mutex<Option<ClaimGate>>,
     #[cfg(test)]
     boundary_claim_gate: Mutex<Option<ClaimGate>>,
@@ -221,27 +217,20 @@ pub(crate) struct AutomationRuntime {
 }
 
 impl AutomationRuntime {
-    #[cfg(test)]
-    pub fn start(
-        initial_config: Option<Config>,
-        focus_events: watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
-        backend: impl HidBackend,
-    ) -> Result<(Self, RuntimeOwner)> {
-        let initial_config = initial_config
-            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
-            .transpose()
-            .map_err(format_compilation_errors)?;
-        Self::start_active_inner(initial_config, focus_events, focus_source, backend, None)
-    }
-
     pub fn start_active(
         initial_config: Option<Arc<ActiveConfig>>,
         focus_events: watch::Receiver<ForegroundObservation>,
         focus_source: FocusSourceState,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
-        Self::start_active_inner(initial_config, focus_events, focus_source, backend, None)
+        Self::start_active_inner(
+            initial_config,
+            focus_events,
+            focus_source,
+            backend,
+            #[cfg(test)]
+            None,
+        )
     }
 
     fn start_active_inner(
@@ -249,7 +238,7 @@ impl AutomationRuntime {
         focus_events: watch::Receiver<ForegroundObservation>,
         focus_source: FocusSourceState,
         backend: impl HidBackend,
-        initialization_claim_gate: Option<ClaimGate>,
+        #[cfg(test)] initialization_claim_gate: Option<ClaimGate>,
     ) -> Result<(Self, RuntimeOwner)> {
         let (commands, command_rx) = mpsc::channel(ORDINARY_COMMAND_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
@@ -283,6 +272,7 @@ impl AutomationRuntime {
                 refresh_pending: true,
                 shutdown_requested: false,
             }),
+            #[cfg(test)]
             initialization_claim_gate: Mutex::new(initialization_claim_gate),
             #[cfg(test)]
             boundary_claim_gate: Mutex::new(None),
@@ -309,37 +299,6 @@ impl AutomationRuntime {
         Ok((runtime, owner))
     }
 
-    #[cfg(test)]
-    fn start_with_initialization_claim_gate(
-        initial_config: Option<Config>,
-        focus_events: watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
-        backend: impl HidBackend,
-    ) -> Result<(
-        Self,
-        RuntimeOwner,
-        std::sync::mpsc::Receiver<()>,
-        std::sync::mpsc::Sender<()>,
-    )> {
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let initial_config = initial_config
-            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
-            .transpose()
-            .map_err(format_compilation_errors)?;
-        let (runtime, owner) = Self::start_active_inner(
-            initial_config,
-            focus_events,
-            focus_source,
-            backend,
-            Some(ClaimGate {
-                started: started_tx,
-                release: release_rx,
-            }),
-        )?;
-        Ok((runtime, owner, started_rx, release_tx))
-    }
-
     pub(crate) fn replace_active_config(&self, config: Arc<ActiveConfig>) {
         *self
             .shared
@@ -347,20 +306,6 @@ impl AutomationRuntime {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
         self.update_health(|health| health.has_config = true);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_config_snapshot(&self) -> Option<Arc<ActiveConfig>> {
-        self.shared
-            .config
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    #[cfg(test)]
-    pub fn status(&self) -> RuntimeStatus {
-        self.shared.status.borrow().clone()
     }
 
     pub fn subscribe_status(&self) -> watch::Receiver<RuntimeStatus> {
@@ -384,11 +329,6 @@ impl AutomationRuntime {
             latest_handled: markers.latest_handled,
             latest_cancelled: markers.latest_cancelled,
         }
-    }
-
-    #[cfg(test)]
-    pub fn hid_inventory(&self) -> Arc<HidInventory> {
-        self.shared.hid_inventory.borrow().clone()
     }
 
     pub fn subscribe_hid_inventory(&self) -> watch::Receiver<Arc<HidInventory>> {
@@ -507,19 +447,6 @@ impl AutomationRuntime {
         false
     }
 
-    fn wait_before_initialization_claim(&self) {
-        let gate = self
-            .shared
-            .initialization_claim_gate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        if let Some(gate) = gate {
-            gate.started.send(()).unwrap();
-            gate.release.recv().unwrap();
-        }
-    }
-
     fn claim_boundary(
         &self,
         focus_events: &mut watch::Receiver<ForegroundObservation>,
@@ -577,37 +504,6 @@ impl AutomationRuntime {
             .latest_handled = Some(generation);
     }
 
-    #[cfg(test)]
-    fn gate_next_focus_boundary_claim(
-        &self,
-    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *self
-            .shared
-            .boundary_claim_gate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ClaimGate {
-            started: started_tx,
-            release: release_rx,
-        });
-        (started_rx, release_tx)
-    }
-
-    #[cfg(test)]
-    fn wait_before_focus_boundary_claim(&self) {
-        let gate = self
-            .shared
-            .boundary_claim_gate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        if let Some(gate) = gate {
-            gate.started.send(()).unwrap();
-            gate.release.recv().unwrap();
-        }
-    }
-
     fn update_health(&self, update: impl FnOnce(&mut RuntimeHealth)) {
         let mut health = self
             .shared
@@ -656,25 +552,6 @@ impl AutomationRuntime {
         admission.refresh_pending = false;
         admission.shutdown_requested = true;
     }
-
-    #[cfg(test)]
-    fn status_history(&self) -> Vec<RuntimeStatus> {
-        self.shared
-            .status_history
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-}
-
-#[cfg(test)]
-fn format_compilation_errors(errors: Vec<ValidationError>) -> anyhow::Error {
-    let details = errors
-        .iter()
-        .map(|error| format!("{}: {}", error.path, error.message))
-        .collect::<Vec<_>>()
-        .join("; ");
-    anyhow::anyhow!("configuration could not be activated: {details}")
 }
 
 pub(crate) struct RuntimeOwner {

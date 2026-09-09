@@ -64,6 +64,7 @@ async fn run_loop(
     mut shutdown: watch::Receiver<bool>,
     mut backend: Box<dyn HidBackend>,
 ) {
+    #[cfg(test)]
     runtime.wait_before_initialization_claim();
     if !runtime.claim_initialization() {
         cancel_pending_commands(&runtime, None, &mut commands);
