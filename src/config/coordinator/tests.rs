@@ -10,7 +10,8 @@ use std::{
 
 use super::*;
 use crate::{
-    config::{Automation, Device, Event, SendAction},
+    config::{Automation, Device, EventKind, SendAction},
+    event::Event,
     focused_window::FocusedWindow,
 };
 
@@ -179,7 +180,7 @@ fn active_config() -> EditableConfig {
         id: "automation".into(),
         name: "Automation".into(),
         enabled: true,
-        event: Event::FocusedWindowChanged,
+        event: EventKind::FocusedWindowChanged,
         cases: Vec::new(),
         otherwise_actions: vec![SendAction {
             id: "send".into(),
@@ -244,7 +245,12 @@ fn initial_load_publishes_one_matching_immutable_revision() {
     assert!(Arc::ptr_eq(current.editable(), subscribed.editable()));
     assert!(Arc::ptr_eq(current.active(), subscribed.active()));
     assert!(current.warnings().is_empty());
-    let dispatches = current.active().evaluate_window(&FocusedWindow::default());
+    let dispatches = current
+        .active()
+        .evaluate_event(&Event::FocusedWindowChanged {
+            window: FocusedWindow::default(),
+            generation: 1,
+        });
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].report(), &[0x42]);
     assert_eq!(event_snapshot(&events), ["load", "reconcile:false"]);

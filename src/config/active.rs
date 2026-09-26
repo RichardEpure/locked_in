@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use regex::{Regex, RegexBuilder};
 
 use super::{
-    Device, EditableConfig, MatchOperator, SendAction, TextCondition, ValidationError,
+    Device, EditableConfig, EventKind, MatchOperator, SendAction, TextCondition, ValidationError,
     WindowMatcher,
 };
-use crate::focused_window::FocusedWindow;
+use crate::{event::Event, focused_window::FocusedWindow};
 
 #[derive(Debug, Clone)]
 pub struct ActiveConfig {
@@ -26,6 +26,7 @@ pub struct ActiveDispatch<'a> {
 #[derive(Debug, Clone)]
 struct ActiveAutomation {
     name: String,
+    event: EventKind,
     cases: Box<[ActiveCase]>,
     otherwise_actions: Box<[ActiveAction]>,
 }
@@ -86,10 +87,14 @@ impl ActiveConfig {
         })
     }
 
-    pub fn evaluate_window<'a>(&'a self, window: &FocusedWindow) -> Vec<ActiveDispatch<'a>> {
+    pub fn evaluate_event<'a>(&'a self, event: &Event) -> Vec<ActiveDispatch<'a>> {
         let mut dispatches = Vec::new();
-        for automation in &self.automations {
-            let selected = automation.cases.iter().find(|case| case.matches(window));
+        for automation in self
+            .automations
+            .iter()
+            .filter(|automation| automation.event == event.kind())
+        {
+            let selected = automation.cases.iter().find(|case| case.matches(event));
             let (case_name, actions) = if let Some(case) = selected {
                 (case.name.as_str(), case.actions.as_ref())
             } else {
@@ -153,6 +158,7 @@ impl ActiveAutomation {
 
         Ok(Self {
             name: automation.name.clone(),
+            event: automation.event,
             cases: cases.into_boxed_slice(),
             otherwise_actions,
         })
@@ -175,14 +181,18 @@ impl ActiveCase {
         })
     }
 
-    fn matches(&self, window: &FocusedWindow) -> bool {
-        self.applications
-            .iter()
-            .any(|matcher| matcher.matches(window))
-            && !self
-                .exceptions
-                .iter()
-                .any(|matcher| matcher.matches(window))
+    fn matches(&self, event: &Event) -> bool {
+        match event {
+            Event::FocusedWindowChanged { window, .. } => {
+                self.applications
+                    .iter()
+                    .any(|matcher| matcher.matches(window))
+                    && !self
+                        .exceptions
+                        .iter()
+                        .any(|matcher| matcher.matches(window))
+            }
+        }
     }
 }
 

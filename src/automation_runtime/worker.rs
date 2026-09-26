@@ -3,19 +3,19 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    AutomationRuntime, BoundaryClaim, RuntimeCommand, RuntimeLifecycle, RuntimeRequestError,
-    TestDispatchResult,
+    AutomationRuntime, BoundaryClaim, RuntimeCommand, RuntimeInputs, RuntimeLifecycle,
+    RuntimeRequestError, TestDispatchResult,
 };
 use crate::{
     app_log,
     config::{ActiveConfig, Device, SendAction},
-    focused_window::ForegroundObservation,
+    event::Event,
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
 };
 
 pub(super) fn run(
     runtime: AutomationRuntime,
-    focus_events: watch::Receiver<ForegroundObservation>,
+    inputs: RuntimeInputs,
     commands: mpsc::Receiver<RuntimeCommand>,
     shutdown: watch::Receiver<bool>,
     backend: Box<dyn HidBackend>,
@@ -25,7 +25,7 @@ pub(super) fn run(
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .map_err(|error| format!("automation executor could not start: {error}"))?;
-        tokio_runtime.block_on(run_loop(runtime, focus_events, commands, shutdown, backend));
+        tokio_runtime.block_on(run_loop(runtime, inputs, commands, shutdown, backend));
         Ok::<(), String>(())
     }));
     match outcome {
@@ -59,14 +59,14 @@ pub(super) fn run(
 
 async fn run_loop(
     runtime: AutomationRuntime,
-    mut focus_events: watch::Receiver<ForegroundObservation>,
+    mut inputs: RuntimeInputs,
     mut commands: mpsc::Receiver<RuntimeCommand>,
     mut shutdown: watch::Receiver<bool>,
     mut backend: Box<dyn HidBackend>,
 ) {
     #[cfg(test)]
     runtime.wait_before_initialization_claim();
-    if !runtime.claim_initialization() {
+    if !runtime.claim_initialization(&inputs) {
         cancel_pending_commands(&runtime, None, &mut commands);
         runtime.update_health(|health| {
             health.lifecycle = RuntimeLifecycle::Stopped;
@@ -75,31 +75,21 @@ async fn run_loop(
     }
     refresh_hid(&runtime, backend.as_mut(), true);
 
-    let mut focus_open = true;
     let mut commands_open = true;
-    let mut handled_focus_generation = 0;
     let mut staged_command = None;
     loop {
         #[cfg(test)]
-        if focus_events.borrow().generation > handled_focus_generation {
-            runtime.wait_before_focus_boundary_claim();
+        if inputs.has_pending() {
+            runtime.wait_before_event_boundary_claim();
         }
-        match runtime.claim_boundary(
-            &mut focus_events,
-            handled_focus_generation,
-            staged_command.is_some(),
-        ) {
+        match runtime.claim_boundary(&mut inputs, staged_command.is_some()) {
             BoundaryClaim::Shutdown => {
                 cancel_pending_commands(&runtime, staged_command.take(), &mut commands);
                 break;
             }
-            BoundaryClaim::Focus {
-                observation,
-                config,
-            } => {
-                dispatch_focus(&runtime, backend.as_mut(), &observation, config.as_deref());
-                handled_focus_generation = observation.generation;
-                runtime.mark_focus_handled(observation.generation);
+            BoundaryClaim::Event { event, config } => {
+                dispatch_event(&runtime, backend.as_mut(), &event, config.as_deref());
+                inputs.mark_handled(event);
                 continue;
             }
             BoundaryClaim::Command => {
@@ -129,11 +119,10 @@ async fn run_loop(
             changed = shutdown.changed() => {
                 debug_assert!(changed.is_ok() && *shutdown.borrow_and_update());
             }
-            changed = focus_events.changed(), if focus_open => {
-                if changed.is_err() {
-                    focus_open = false;
+            source_change = inputs.changed() => {
+                if let Some((source, state)) = source_change {
                     runtime.update_health(|health| {
-                        health.focus_error = Some("focus event source closed".to_string());
+                        health.sources.insert(source, state);
                     });
                 }
             }
@@ -237,10 +226,10 @@ fn send_report(
     result
 }
 
-fn dispatch_focus(
+fn dispatch_event(
     runtime: &AutomationRuntime,
     backend: &mut dyn HidBackend,
-    focused: &ForegroundObservation,
+    event: &Event,
     config: Option<&ActiveConfig>,
 ) {
     let Some(config) = config else {
@@ -248,7 +237,7 @@ fn dispatch_focus(
     };
     let mut attempted = false;
     let mut last_error = None;
-    for evaluated in config.evaluate_window(&focused.window) {
+    for evaluated in config.evaluate_event(event) {
         for device in evaluated.destinations() {
             attempted = true;
             match send_report(runtime, backend, device, evaluated.report()) {

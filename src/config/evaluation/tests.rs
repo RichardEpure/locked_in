@@ -73,8 +73,24 @@ fn first_matching_case_wins_and_otherwise_is_fallback() {
         ..FocusedWindow::default()
     };
 
-    assert_eq!(config.evaluate_window(&matching)[0].action.report, [0x87]);
-    assert_eq!(config.evaluate_window(&other)[0].action.report, [0x86]);
+    assert_eq!(
+        config.evaluate_event(&Event::FocusedWindowChanged {
+            window: matching,
+            generation: 1
+        })[0]
+            .action
+            .report,
+        [0x87]
+    );
+    assert_eq!(
+        config.evaluate_event(&Event::FocusedWindowChanged {
+            window: other,
+            generation: 1
+        })[0]
+            .action
+            .report,
+        [0x86]
+    );
 }
 
 #[test]
@@ -101,10 +117,23 @@ fn neutral_focus_fields_are_anded_and_matchers_are_ored() {
     };
 
     assert_eq!(
-        config.evaluate_window(&wrong_executable)[0].action.report,
+        config.evaluate_event(&Event::FocusedWindowChanged {
+            window: wrong_executable,
+            generation: 1
+        })[0]
+            .action
+            .report,
         [0x86]
     );
-    assert_eq!(config.evaluate_window(&game)[0].action.report, [0x87]);
+    assert_eq!(
+        config.evaluate_event(&Event::FocusedWindowChanged {
+            window: game,
+            generation: 1
+        })[0]
+            .action
+            .report,
+        [0x87]
+    );
 }
 
 #[test]
@@ -118,7 +147,15 @@ fn matching_exception_skips_to_next_case() {
         ..FocusedWindow::default()
     };
 
-    assert_eq!(config.evaluate_window(&window)[0].action.report, [0x86]);
+    assert_eq!(
+        config.evaluate_event(&Event::FocusedWindowChanged {
+            window,
+            generation: 1
+        })[0]
+            .action
+            .report,
+        [0x86]
+    );
 }
 
 #[test]
@@ -133,5 +170,13 @@ fn all_automations_evaluate_independently() {
         ..FocusedWindow::default()
     };
 
-    assert_eq!(config.evaluate_window(&window).len(), 2);
+    assert_eq!(
+        config
+            .evaluate_event(&Event::FocusedWindowChanged {
+                window,
+                generation: 1
+            })
+            .len(),
+        2
+    );
 }

@@ -11,7 +11,7 @@ use std::{
 
 use super::*;
 use crate::{
-    automation_runtime::{AutomationRuntime, FocusSourceState},
+    automation_runtime::{AutomationRuntime, EventSourceState, FocusInput, RuntimeInputs},
     config::{ConfigCoordinator, ConfigStore, StartWithWindows, StartWithWindowsOutcome},
     focused_window::ForegroundObservation,
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
@@ -84,8 +84,9 @@ fn start_runtime(
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     AutomationRuntime::start_active(
         Some(initial),
-        focus_rx,
-        FocusSourceState::Available,
+        RuntimeInputs {
+            focused_window: FocusInput::new(focus_rx, EventSourceState::Available),
+        },
         ReadyBackend,
     )
     .unwrap()

@@ -67,7 +67,7 @@ pub struct Automation {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
-    pub event: Event,
+    pub event: EventKind,
     #[serde(default)]
     pub cases: Vec<AutomationCase>,
     #[serde(default)]
@@ -80,18 +80,26 @@ impl Default for Automation {
             id: String::new(),
             name: "New automation".to_string(),
             enabled: false,
-            event: Event::default(),
+            event: EventKind::default(),
             cases: Vec::new(),
             otherwise_actions: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Event {
+pub enum EventKind {
     #[default]
     FocusedWindowChanged,
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::FocusedWindowChanged => "focused_window_changed",
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]

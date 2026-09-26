@@ -1,6 +1,8 @@
+mod inputs;
 mod worker;
 
 use std::{
+    collections::BTreeMap,
     error::Error,
     fmt::{self, Display, Formatter},
     sync::{Arc, Mutex, RwLock},
@@ -11,19 +13,15 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{ActiveConfig, Device, SendAction},
-    focused_window::ForegroundObservation,
+    config::{ActiveConfig, Device, EventKind, SendAction},
+    event::Event,
     hid::{HidBackend, HidInventory},
 };
 
+pub(crate) use inputs::{EventSourceState, FocusInput, RuntimeInputs};
+
 #[cfg(test)]
 use tests::ClaimGate;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FocusSourceState {
-    Available,
-    Unavailable(String),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimePhase {
@@ -65,7 +63,7 @@ enum RuntimeLifecycle {
 }
 
 struct RuntimeHealth {
-    focus_error: Option<String>,
+    sources: BTreeMap<EventKind, EventSourceState>,
     refresh_error: Option<String>,
     dispatch_error: Option<String>,
     worker_error: Option<String>,
@@ -96,8 +94,24 @@ impl RuntimeHealth {
         if let Some(error) = &self.worker_error {
             unavailable.push(error.clone());
         }
-        if let Some(error) = &self.focus_error {
-            unavailable.push(error.clone());
+        let source_errors = self
+            .sources
+            .iter()
+            .filter_map(|(source, state)| match state {
+                EventSourceState::Available => None,
+                EventSourceState::Unavailable(error) => Some(format!("{source}: {error}")),
+            })
+            .collect::<Vec<_>>();
+        if !self
+            .sources
+            .values()
+            .any(|state| *state == EventSourceState::Available)
+        {
+            if source_errors.is_empty() {
+                unavailable.push("event sources are unavailable".to_string());
+            } else {
+                unavailable.extend(source_errors.iter().cloned());
+            }
         }
         if !self.has_config {
             unavailable.push("configuration is unavailable".to_string());
@@ -108,11 +122,14 @@ impl RuntimeHealth {
                 detail: Some(unavailable.join("; ")),
             };
         }
-        let degraded = self
-            .refresh_error
-            .iter()
-            .chain(&self.dispatch_error)
-            .cloned()
+        let degraded = source_errors
+            .into_iter()
+            .chain(
+                self.refresh_error
+                    .iter()
+                    .chain(&self.dispatch_error)
+                    .cloned(),
+            )
             .collect::<Vec<_>>();
         if !degraded.is_empty() {
             return RuntimeStatus {
@@ -132,25 +149,10 @@ struct Admission {
     shutdown_requested: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct FocusGenerationProgress {
-    pub latest_observed: u64,
-    pub latest_started: Option<u64>,
-    pub latest_handled: Option<u64>,
-    pub latest_cancelled: Option<u64>,
-}
-
-#[derive(Default)]
-struct FocusGenerationMarkers {
-    latest_started: Option<u64>,
-    latest_handled: Option<u64>,
-    latest_cancelled: Option<u64>,
-}
-
 enum BoundaryClaim {
     Shutdown,
-    Focus {
-        observation: ForegroundObservation,
+    Event {
+        event: Event,
         config: Option<Arc<ActiveConfig>>,
     },
     Command,
@@ -159,8 +161,6 @@ enum BoundaryClaim {
 
 struct Shared {
     config: RwLock<Option<Arc<ActiveConfig>>>,
-    latest_focus: watch::Receiver<ForegroundObservation>,
-    focus_progress: Mutex<FocusGenerationMarkers>,
     health: Mutex<RuntimeHealth>,
     status: watch::Sender<RuntimeStatus>,
     #[cfg(test)]
@@ -219,14 +219,12 @@ pub(crate) struct AutomationRuntime {
 impl AutomationRuntime {
     pub fn start_active(
         initial_config: Option<Arc<ActiveConfig>>,
-        focus_events: watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
+        inputs: RuntimeInputs,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
         Self::start_active_inner(
             initial_config,
-            focus_events,
-            focus_source,
+            inputs,
             backend,
             #[cfg(test)]
             None,
@@ -235,8 +233,7 @@ impl AutomationRuntime {
 
     fn start_active_inner(
         initial_config: Option<Arc<ActiveConfig>>,
-        focus_events: watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
+        inputs: RuntimeInputs,
         backend: impl HidBackend,
         #[cfg(test)] initialization_claim_gate: Option<ClaimGate>,
     ) -> Result<(Self, RuntimeOwner)> {
@@ -245,17 +242,11 @@ impl AutomationRuntime {
         let (status, _) = watch::channel(RuntimeStatus::starting());
         let (hid_inventory, _) = watch::channel(Arc::new(HidInventory::default()));
         let (completed, completion_rx) = std::sync::mpsc::channel();
-        let focus_error = match focus_source {
-            FocusSourceState::Available => None,
-            FocusSourceState::Unavailable(error) => Some(error),
-        };
         let has_config = initial_config.is_some();
         let shared = Arc::new(Shared {
             config: RwLock::new(initial_config),
-            latest_focus: focus_events.clone(),
-            focus_progress: Mutex::new(FocusGenerationMarkers::default()),
             health: Mutex::new(RuntimeHealth {
-                focus_error,
+                sources: inputs.source_states(),
                 refresh_error: None,
                 dispatch_error: None,
                 worker_error: None,
@@ -284,7 +275,7 @@ impl AutomationRuntime {
             .spawn(move || {
                 worker::run(
                     worker_runtime,
-                    focus_events,
+                    inputs,
                     command_rx,
                     shutdown_rx,
                     Box::new(backend),
@@ -310,25 +301,6 @@ impl AutomationRuntime {
 
     pub fn subscribe_status(&self) -> watch::Receiver<RuntimeStatus> {
         self.shared.status.subscribe()
-    }
-
-    #[allow(
-        dead_code,
-        reason = "diagnostic snapshot is currently exercised by runtime tests"
-    )]
-    pub fn focus_progress_snapshot(&self) -> FocusGenerationProgress {
-        let latest_focus = self.shared.latest_focus.borrow();
-        let markers = self
-            .shared
-            .focus_progress
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        FocusGenerationProgress {
-            latest_observed: latest_focus.generation,
-            latest_started: markers.latest_started,
-            latest_handled: markers.latest_handled,
-            latest_cancelled: markers.latest_cancelled,
-        }
     }
 
     pub fn subscribe_hid_inventory(&self) -> watch::Receiver<Arc<HidInventory>> {
@@ -426,7 +398,7 @@ impl AutomationRuntime {
         self.shared.shutdown.send_replace(true);
     }
 
-    fn claim_initialization(&self) -> bool {
+    fn claim_initialization(&self, inputs: &RuntimeInputs) -> bool {
         let admission = self
             .shared
             .admission
@@ -436,25 +408,13 @@ impl AutomationRuntime {
             return true;
         }
 
-        let latest_focus = self.shared.latest_focus.borrow();
-        if latest_focus.generation != 0 {
-            self.shared
-                .focus_progress
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .latest_cancelled = Some(latest_focus.generation);
-        }
+        inputs.cancel_pending();
         false
     }
 
-    fn claim_boundary(
-        &self,
-        focus_events: &mut watch::Receiver<ForegroundObservation>,
-        handled_generation: u64,
-        command_staged: bool,
-    ) -> BoundaryClaim {
-        // This order defines the batch claim. The guards stay held through the config clone and
-        // started/cancelled mark; operations completing after their release belong to a later batch.
+    fn claim_boundary(&self, inputs: &mut RuntimeInputs, command_staged: bool) -> BoundaryClaim {
+        // Admission and config are held before inputs inspect and mark their latest observations.
+        // Input guards stay held through that mark; later observations belong to a later batch.
         let admission = self
             .shared
             .admission
@@ -465,22 +425,12 @@ impl AutomationRuntime {
             .config
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let observation = focus_events.borrow_and_update();
-        let mut progress = self
-            .shared
-            .focus_progress
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
         let claim = if admission.shutdown_requested {
-            if observation.generation > handled_generation {
-                progress.latest_cancelled = Some(observation.generation);
-            }
+            inputs.cancel_pending();
             BoundaryClaim::Shutdown
-        } else if observation.generation > handled_generation {
-            progress.latest_started = Some(observation.generation);
-            BoundaryClaim::Focus {
-                observation: observation.clone(),
+        } else if let Some(event) = inputs.claim_next() {
+            BoundaryClaim::Event {
+                event,
                 config: config.clone(),
             }
         } else if command_staged {
@@ -489,19 +439,9 @@ impl AutomationRuntime {
             BoundaryClaim::Wait
         };
 
-        drop(progress);
-        drop(observation);
         drop(config);
         drop(admission);
         claim
-    }
-
-    fn mark_focus_handled(&self, generation: u64) {
-        self.shared
-            .focus_progress
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .latest_handled = Some(generation);
     }
 
     fn update_health(&self, update: impl FnOnce(&mut RuntimeHealth)) {

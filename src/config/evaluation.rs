@@ -3,7 +3,7 @@ use regex::RegexBuilder;
 use super::model::{
     Device, EditableConfig, MatchOperator, SendAction, TextCondition, WindowMatcher,
 };
-use crate::focused_window::FocusedWindow;
+use crate::{event::Event, focused_window::FocusedWindow};
 
 #[derive(Debug)]
 pub struct EvaluatedAction<'a> {
@@ -14,21 +14,23 @@ pub struct EvaluatedAction<'a> {
 }
 
 impl EditableConfig {
-    pub fn evaluate_window<'a>(&'a self, window: &FocusedWindow) -> Vec<EvaluatedAction<'a>> {
+    pub fn evaluate_event<'a>(&'a self, event: &Event) -> Vec<EvaluatedAction<'a>> {
         let mut evaluated = Vec::new();
         for automation in self
             .automations
             .iter()
-            .filter(|automation| automation.enabled)
+            .filter(|automation| automation.enabled && automation.event == event.kind())
         {
-            let selected = automation.cases.iter().find(|case| {
-                case.applications
-                    .iter()
-                    .any(|matcher| matcher.matches(window))
-                    && !case
-                        .exceptions
+            let selected = automation.cases.iter().find(|case| match event {
+                Event::FocusedWindowChanged { window, .. } => {
+                    case.applications
                         .iter()
                         .any(|matcher| matcher.matches(window))
+                        && !case
+                            .exceptions
+                            .iter()
+                            .any(|matcher| matcher.matches(window))
+                }
             });
             let (case_name, actions) = if let Some(case) = selected {
                 (case.name.as_str(), case.actions.as_slice())

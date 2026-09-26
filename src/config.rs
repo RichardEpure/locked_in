@@ -15,11 +15,9 @@ pub use coordinator::{
     ConfigCoordinator, ConfigCoordinatorError, ConfigWarning, PublishedConfig, StartWithWindows,
     StartWithWindowsOutcome,
 };
-#[cfg(test)]
-pub use model::Event;
 pub use model::{
-    Automation, AutomationCase, Device, EditableConfig, LogLevel, MatchOperator, SendAction,
-    Settings, TextCondition, WindowMatcher,
+    Automation, AutomationCase, Device, EditableConfig, EventKind, LogLevel, MatchOperator,
+    SendAction, Settings, TextCondition, WindowMatcher,
 };
 pub use paths::{ApplicationPaths, resolve_application_paths};
 pub use store::ConfigStore;

@@ -7,9 +7,10 @@ use std::{
 };
 
 use super::{
-    AutomationRuntime, FocusGenerationProgress, FocusSourceState, HidRefreshRequestResult,
-    ORDINARY_COMMAND_CAPACITY, RuntimeOwner, RuntimePhase, RuntimeRequestError, RuntimeStatus,
-    TestDispatchResult,
+    AutomationRuntime, EventSourceState, FocusInput, HidRefreshRequestResult,
+    ORDINARY_COMMAND_CAPACITY, RuntimeInputs, RuntimeOwner, RuntimePhase, RuntimeRequestError,
+    RuntimeStatus, TestDispatchResult,
+    inputs::{FocusGenerationProgress, FocusProgress},
 };
 use crate::{
     config::{
@@ -28,21 +29,19 @@ pub(super) struct ClaimGate {
 impl AutomationRuntime {
     fn start(
         initial_config: Option<Config>,
-        focus_events: tokio::sync::watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
+        focused_window: FocusInput,
         backend: impl HidBackend,
     ) -> anyhow::Result<(Self, RuntimeOwner)> {
         let initial_config = initial_config
             .map(|config| ActiveConfig::compile(&config).map(Arc::new))
             .transpose()
             .map_err(format_compilation_errors)?;
-        Self::start_active(initial_config, focus_events, focus_source, backend)
+        Self::start_active(initial_config, RuntimeInputs { focused_window }, backend)
     }
 
     fn start_with_initialization_claim_gate(
         initial_config: Option<Config>,
-        focus_events: tokio::sync::watch::Receiver<ForegroundObservation>,
-        focus_source: FocusSourceState,
+        focused_window: FocusInput,
         backend: impl HidBackend,
     ) -> anyhow::Result<(Self, RuntimeOwner, mpsc::Receiver<()>, mpsc::Sender<()>)> {
         let (started_tx, started_rx) = mpsc::channel();
@@ -53,8 +52,7 @@ impl AutomationRuntime {
             .map_err(format_compilation_errors)?;
         let (runtime, owner) = Self::start_active_inner(
             initial_config,
-            focus_events,
-            focus_source,
+            RuntimeInputs { focused_window },
             backend,
             Some(ClaimGate {
                 started: started_tx,
@@ -107,7 +105,7 @@ impl AutomationRuntime {
         (started_rx, release_tx)
     }
 
-    pub(super) fn wait_before_focus_boundary_claim(&self) {
+    pub(super) fn wait_before_event_boundary_claim(&self) {
         let gate = self
             .shared
             .boundary_claim_gate
@@ -346,7 +344,23 @@ fn start(
     focus_rx: tokio::sync::watch::Receiver<ForegroundObservation>,
     backend: RecordingBackend,
 ) -> (AutomationRuntime, RuntimeOwner) {
-    AutomationRuntime::start(config, focus_rx, FocusSourceState::Available, backend).unwrap()
+    AutomationRuntime::start(
+        config,
+        FocusInput::new(focus_rx, EventSourceState::Available),
+        backend,
+    )
+    .unwrap()
+}
+
+fn start_with_progress(
+    config: Option<Config>,
+    focus_rx: tokio::sync::watch::Receiver<ForegroundObservation>,
+    backend: RecordingBackend,
+) -> (AutomationRuntime, RuntimeOwner, FocusProgress) {
+    let focus = FocusInput::new(focus_rx, EventSourceState::Available);
+    let progress = focus.progress();
+    let (runtime, owner) = AutomationRuntime::start(config, focus, backend).unwrap();
+    (runtime, owner, progress)
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
@@ -372,8 +386,8 @@ fn wait_for_revision(runtime: &AutomationRuntime, revision: u64) {
     wait_until(|| runtime.hid_inventory().revision == revision);
 }
 
-fn focus_progress(runtime: &AutomationRuntime) -> FocusGenerationProgress {
-    let progress = runtime.focus_progress_snapshot();
+fn focus_progress(handle: &FocusProgress) -> FocusGenerationProgress {
+    let progress = handle.snapshot();
     for generation in [
         progress.latest_started,
         progress.latest_handled,
@@ -450,7 +464,8 @@ fn startup_publishes_refreshing_before_the_final_inventory_and_status() {
 fn startup_refresh_completes_before_retained_initial_focus_runs() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(focused(1, "target"));
     let (backend, events) = backend([ready(1)]);
-    let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
+    let (_runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
 
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshStarted);
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshFinished(1));
@@ -458,7 +473,7 @@ fn startup_refresh_completes_before_retained_initial_focus_runs() {
         events.recv().unwrap(),
         BackendEvent::Send("automatic".to_string(), vec![0x10])
     );
-    wait_until(|| focus_progress(&runtime).latest_handled == Some(1));
+    wait_until(|| focus_progress(&progress).latest_handled == Some(1));
     owner.shutdown_and_join(Duration::from_secs(1));
 }
 
@@ -466,11 +481,12 @@ fn startup_refresh_completes_before_retained_initial_focus_runs() {
 fn shutdown_completed_before_initialization_claim_cancels_startup_refresh() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(focused(1, "target"));
     let (backend, events) = backend([ready(1)]);
+    let focus = FocusInput::new(focus_rx, EventSourceState::Available);
+    let progress = focus.progress();
     let (runtime, owner, claim_reached, release_claim) =
         AutomationRuntime::start_with_initialization_claim_gate(
             Some(config(0x10, &["automatic"])),
-            focus_rx,
-            FocusSourceState::Available,
+            focus,
             backend,
         )
         .unwrap();
@@ -483,7 +499,7 @@ fn shutdown_completed_before_initialization_claim_cancels_startup_refresh() {
     assert_eq!(runtime.status().phase, RuntimePhase::Stopped);
     assert_eq!(runtime.hid_inventory().revision, 0);
     assert_eq!(
-        focus_progress(&runtime),
+        focus_progress(&progress),
         FocusGenerationProgress {
             latest_observed: 1,
             latest_started: None,
@@ -521,7 +537,8 @@ fn shutdown_after_initialization_claim_waits_for_atomic_startup_refresh() {
 fn shutdown_completed_before_claim_cancels_the_provisional_focus() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (backend, events) = backend([ready(1)]);
-    let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
+    let (runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
     let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
 
@@ -532,7 +549,7 @@ fn shutdown_completed_before_claim_cancels_the_provisional_focus() {
     owner.shutdown_and_join(Duration::from_secs(1));
 
     assert_eq!(
-        focus_progress(&runtime),
+        focus_progress(&progress),
         FocusGenerationProgress {
             latest_observed: 1,
             latest_started: None,
@@ -547,7 +564,7 @@ fn shutdown_completed_before_claim_cancels_the_provisional_focus() {
 fn newer_focus_completed_before_claim_replaces_the_provisional_generation() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (backend, events) = backend([ready(1)]);
-    let (runtime, owner) = start(
+    let (runtime, owner, progress) = start_with_progress(
         Some(routed_config(&[("A", 0x0a), ("B", 0x0b)])),
         focus_rx,
         backend,
@@ -564,9 +581,9 @@ fn newer_focus_completed_before_claim_replaces_the_provisional_generation() {
         events.recv().unwrap(),
         BackendEvent::Send("automatic".to_string(), vec![0x0b])
     );
-    wait_until(|| focus_progress(&runtime).latest_handled == Some(2));
+    wait_until(|| focus_progress(&progress).latest_handled == Some(2));
     assert_eq!(
-        focus_progress(&runtime),
+        focus_progress(&progress),
         FocusGenerationProgress {
             latest_observed: 2,
             latest_started: Some(2),
@@ -790,7 +807,8 @@ fn accepted_test_may_starve_during_focus_churn_then_recovers() {
 fn no_action_focus_is_handled_without_retriggering_after_replacement() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (backend, events) = backend([ready(1), ready(2)]);
-    let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
+    let (runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     focus_tx.send_replace(focused(1, "unmatched"));
@@ -802,7 +820,7 @@ fn no_action_focus_is_handled_without_retriggering_after_replacement() {
         BackendEvent::Send("marker".to_string(), vec![0x30])
     );
     assert_eq!(block_on(marker).unwrap().unwrap().sent, 1);
-    assert_eq!(focus_progress(&runtime).latest_handled, Some(1));
+    assert_eq!(focus_progress(&progress).latest_handled, Some(1));
 
     replace_config_for_test(&runtime, routed_config(&[("unmatched", 0x20)])).unwrap();
     assert_eq!(
@@ -1141,7 +1159,8 @@ fn blocked_dispatch_keeps_its_snapshot_and_uses_only_latest_pending_focus() {
     backend
         .send_gates
         .push_back(Some((send_started_tx, send_release)));
-    let (runtime, owner) = start(Some(config(0x10, &["one", "two"])), focus_rx, backend);
+    let (runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["one", "two"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     focus_tx.send_replace(focused(1, "target first"));
@@ -1151,7 +1170,7 @@ fn blocked_dispatch_keeps_its_snapshot_and_uses_only_latest_pending_focus() {
         BackendEvent::Send("one".to_string(), vec![0x10])
     );
     assert_eq!(
-        focus_progress(&runtime),
+        focus_progress(&progress),
         FocusGenerationProgress {
             latest_observed: 1,
             latest_started: Some(1),
@@ -1163,7 +1182,7 @@ fn blocked_dispatch_keeps_its_snapshot_and_uses_only_latest_pending_focus() {
     focus_tx.send_replace(focused(2, "not matching"));
     focus_tx.send_replace(focused(3, "target latest"));
     assert_eq!(
-        focus_progress(&runtime),
+        focus_progress(&progress),
         FocusGenerationProgress {
             latest_observed: 3,
             latest_started: Some(1),
@@ -1282,23 +1301,80 @@ fn send_publishes_implicit_refresh_outcomes() {
 
 #[test]
 fn missing_focus_source_or_configuration_is_unavailable() {
-    let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
-    let (backend, events) = backend([ready(1)]);
-    let (runtime, owner) = AutomationRuntime::start(
-        None,
-        focus_rx,
-        FocusSourceState::Unavailable("hook failed".to_string()),
-        backend,
-    )
-    .unwrap();
+    for (has_config, source_available) in [(true, false), (false, true), (false, false)] {
+        let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
+        let (backend, events) = backend([ready(1)]);
+        let source = if source_available {
+            EventSourceState::Available
+        } else {
+            EventSourceState::Unavailable("hook failed".to_string())
+        };
+        let (runtime, owner) = AutomationRuntime::start(
+            has_config.then(|| config(1, &["one"])),
+            FocusInput::new(focus_rx, source),
+            backend,
+        )
+        .unwrap();
+
+        finish_startup(&runtime, &events, 1);
+        assert_eq!(runtime.status().phase, RuntimePhase::Unavailable);
+        let detail = runtime.status().detail.unwrap();
+        assert_eq!(
+            detail.contains("focused_window_changed: hook failed"),
+            !source_available
+        );
+        assert_eq!(detail.contains("configuration is unavailable"), !has_config);
+        runtime.request_shutdown();
+        runtime.request_shutdown();
+        owner.shutdown_and_join(Duration::from_secs(1));
+        assert_eq!(runtime.status().phase, RuntimePhase::Stopped);
+    }
+}
+
+#[test]
+fn closed_source_finishes_its_last_event_and_keeps_commands_and_shutdown_responsive() {
+    let (focus_tx, focus_rx) = tokio::sync::watch::channel(focused(1, "target"));
+    drop(focus_tx);
+    let (backend, events) = backend([ready(1), ready(2)]);
+    let (runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
 
     finish_startup(&runtime, &events, 1);
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        BackendEvent::Send("automatic".to_string(), vec![0x10])
+    );
+    wait_for_phase(&runtime, RuntimePhase::Unavailable);
+    assert_eq!(focus_progress(&progress).latest_handled, Some(1));
+    assert_eq!(
+        runtime.status().detail.as_deref(),
+        Some("focused_window_changed: event source closed")
+    );
+
+    let response = runtime
+        .admit_test_action(action(0x20), vec![device("manual")])
+        .unwrap();
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        BackendEvent::Send("manual".to_string(), vec![0x20])
+    );
+    assert_eq!(block_on(response).unwrap().unwrap().sent, 1);
+    assert_eq!(
+        runtime.request_hid_refresh(),
+        Ok(HidRefreshRequestResult::Queued)
+    );
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        BackendEvent::RefreshStarted
+    );
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap(),
+        BackendEvent::RefreshFinished(2)
+    );
     assert_eq!(runtime.status().phase, RuntimePhase::Unavailable);
-    assert!(runtime.status().detail.unwrap().contains("hook failed"));
-    runtime.request_shutdown();
-    runtime.request_shutdown();
     owner.shutdown_and_join(Duration::from_secs(1));
     assert_eq!(runtime.status().phase, RuntimePhase::Stopped);
+    assert_eq!(focus_progress(&progress).latest_cancelled, None);
 }
 
 #[test]

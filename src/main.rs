@@ -3,6 +3,7 @@ mod automation_runtime;
 mod components;
 mod config;
 mod config_runtime_bridge;
+mod event;
 mod focused_window;
 mod hid;
 mod win;
@@ -305,21 +306,22 @@ fn main() {
     let publication_subscription = coordinator.as_ref().map(|value| value.subscribe());
     let focus_events = win::subscribe_foreground_observations();
     let (foreground_hook, focus_source) = match win::start_foreground_hook() {
-        Ok(hook) => (Some(hook), automation_runtime::FocusSourceState::Available),
+        Ok(hook) => (Some(hook), automation_runtime::EventSourceState::Available),
         Err(error) => {
             let message = format!("foreground hook failed: {error:#}");
             app_log::write_error(&message);
             (
                 None,
-                automation_runtime::FocusSourceState::Unavailable(message),
+                automation_runtime::EventSourceState::Unavailable(message),
             )
         }
     };
     let active = publication.as_ref().map(|value| value.active().clone());
     let (runtime, runtime_owner) = match automation_runtime::AutomationRuntime::start_active(
         active,
-        focus_events,
-        focus_source,
+        automation_runtime::RuntimeInputs {
+            focused_window: automation_runtime::FocusInput::new(focus_events, focus_source),
+        },
         hid::SystemHidBackend::new(),
     ) {
         Ok(runtime) => runtime,

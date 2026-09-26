@@ -148,7 +148,10 @@ struct DispatchSnapshot {
 
 fn editable_snapshots(config: &EditableConfig, window: &FocusedWindow) -> Vec<DispatchSnapshot> {
     config
-        .evaluate_window(window)
+        .evaluate_event(&Event::FocusedWindowChanged {
+            window: window.clone(),
+            generation: 1,
+        })
         .into_iter()
         .map(|dispatch| DispatchSnapshot {
             automation: dispatch.automation_name.into(),
@@ -166,7 +169,10 @@ fn editable_snapshots(config: &EditableConfig, window: &FocusedWindow) -> Vec<Di
 
 fn active_snapshots(config: &ActiveConfig, window: &FocusedWindow) -> Vec<DispatchSnapshot> {
     config
-        .evaluate_window(window)
+        .evaluate_event(&Event::FocusedWindowChanged {
+            window: window.clone(),
+            generation: 1,
+        })
         .into_iter()
         .map(|dispatch| DispatchSnapshot {
             automation: dispatch.automation_name().into(),
@@ -241,7 +247,10 @@ fn compiled_config_owns_dispatch_data_after_source_is_dropped() {
         ..FocusedWindow::default()
     };
 
-    let dispatches = active.evaluate_window(&window);
+    let dispatches = active.evaluate_event(&Event::FocusedWindowChanged {
+        window,
+        generation: 1,
+    });
 
     assert_eq!(dispatches[0].automation_name(), "Layers");
     assert_eq!(dispatches[0].case_name(), "Game");
@@ -286,7 +295,14 @@ fn disabled_automation_with_dispatchable_actions_produces_nothing() {
         ..FocusedWindow::default()
     };
 
-    assert!(active.evaluate_window(&window).is_empty());
+    assert!(
+        active
+            .evaluate_event(&Event::FocusedWindowChanged {
+                window,
+                generation: 1
+            })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -315,7 +331,14 @@ fn incomplete_disabled_draft_compiles_and_produces_nothing() {
 
     let active = ActiveConfig::compile(&editable).unwrap();
 
-    assert!(active.evaluate_window(&FocusedWindow::default()).is_empty());
+    assert!(
+        active
+            .evaluate_event(&Event::FocusedWindowChanged {
+                window: FocusedWindow::default(),
+                generation: 1
+            })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -346,7 +369,10 @@ fn alias_destinations_retain_distinct_framing_in_declared_order() {
     };
 
     let active = ActiveConfig::compile(&editable).unwrap();
-    let dispatches = active.evaluate_window(&FocusedWindow::default());
+    let dispatches = active.evaluate_event(&Event::FocusedWindowChanged {
+        window: FocusedWindow::default(),
+        generation: 1,
+    });
     let destinations = dispatches[0].destinations();
 
     assert_eq!(destinations.len(), 2);
