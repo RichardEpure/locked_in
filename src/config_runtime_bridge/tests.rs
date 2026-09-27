@@ -19,6 +19,24 @@ use crate::{
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+impl ConfigRuntimeBridge {
+    /// A real joinable worker held at a gate, for application deadline coverage.
+    pub(crate) fn blocked_for_test() -> (Self, std::sync::mpsc::Sender<()>) {
+        let (shutdown, _) = watch::channel(false);
+        let (release, gate) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _ = gate.recv();
+        });
+        (
+            Self {
+                shutdown,
+                worker: Some(worker),
+            },
+            release,
+        )
+    }
+}
+
 struct ConfirmedStartup;
 
 impl StartWithWindows for ConfirmedStartup {

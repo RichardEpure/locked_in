@@ -326,8 +326,12 @@ pub(crate) struct RuntimeOwner {
 }
 
 impl RuntimeOwner {
-    pub fn shutdown_and_join(mut self, timeout: Duration) {
+    pub fn request_shutdown(&self) {
         self.runtime.request_shutdown();
+    }
+
+    pub fn shutdown_and_join(mut self, timeout: Duration) {
+        self.request_shutdown();
         if self.completion_rx.recv_timeout(timeout).is_ok() {
             if let Some(worker) = self.worker.take() {
                 let _ = worker.join();
@@ -342,7 +346,7 @@ impl RuntimeOwner {
 
 impl Drop for RuntimeOwner {
     fn drop(&mut self) {
-        self.runtime.request_shutdown();
+        self.request_shutdown();
     }
 }
 

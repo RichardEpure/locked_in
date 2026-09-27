@@ -1,4 +1,5 @@
 mod app_log;
+mod application_lifecycle;
 mod automation_runtime;
 mod components;
 mod config;
@@ -359,25 +360,32 @@ fn main() {
                 )),
         )
         .with_menu(None)
-        .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowCloses)
+        // App intercepts exit requests and keeps its completion task alive until
+        // the backend join finishes. Close-to-tray uses the same hide behavior.
+        .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides)
         .with_tray_icon_show_window_on_click(false);
     desktop_config = desktop_config.with_data_directory(paths.webview_data_directory());
+    let mut foreground_hook = foreground_hook;
+    desktop_config = desktop_config.with_custom_event_handler(move |event, _| {
+        if matches!(event, dioxus::desktop::tao::event::Event::LoopDestroyed) {
+            // WinEvent hooks must be unregistered on their registering thread.
+            drop(foreground_hook.take());
+        }
+    });
+    let lifecycle = Arc::new(application_lifecycle::ApplicationLifecycle::new(
+        runtime_owner,
+        runtime_bridge,
+    ));
 
     dioxus::LaunchBuilder::desktop()
         .with_context(runtime)
+        .with_context(lifecycle)
         .with_context(coordinator.clone())
         .with_context(publication_subscription.clone())
         .with_context(paths.clone())
         .with_context(configuration_load_error)
         .with_cfg(desktop_config)
         .launch(components::App);
-    drop(foreground_hook);
-    if let Some(runtime_bridge) = runtime_bridge {
-        runtime_bridge.shutdown_and_join();
-    }
-    runtime_owner.shutdown_and_join(std::time::Duration::from_secs(2));
-    drop(publication_subscription);
-    drop(coordinator);
 }
 
 #[cfg(test)]

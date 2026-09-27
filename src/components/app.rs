@@ -3,18 +3,20 @@ use std::sync::Arc;
 use dioxus::{
     desktop::{
         WindowCloseBehaviour,
+        tao::event::{Event, WindowEvent},
         trayicon::{
             Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
             menu::{Menu, MenuItem},
         },
-        use_muda_event_handler, use_tray_icon_event_handler, use_window,
+        use_muda_event_handler, use_tray_icon_event_handler, use_window, use_wry_event_handler,
     },
     prelude::*,
 };
 
 use crate::{
-    FOCUSED_WINDOW_SIGNAL, app_log, arm_capture,
-    automation_runtime::AutomationRuntime,
+    FOCUSED_WINDOW_SIGNAL, app_log,
+    application_lifecycle::ApplicationLifecycle,
+    arm_capture,
     config::{LogLevel, PublishedConfig},
     focused_window::FocusedWindow,
     win,
@@ -32,7 +34,8 @@ const ROBOTO_FONT: Asset = asset!(
 #[component]
 pub(crate) fn App() -> Element {
     let window = use_window();
-    let runtime = consume_context::<AutomationRuntime>();
+    let lifecycle = consume_context::<Arc<ApplicationLifecycle>>();
+    let close_behavior = use_signal(|| WindowCloseBehaviour::WindowCloses);
     let publication_subscription =
         consume_context::<Option<tokio::sync::watch::Receiver<Arc<PublishedConfig>>>>();
     let publication = use_signal(|| None::<Arc<PublishedConfig>>);
@@ -69,34 +72,42 @@ pub(crate) fn App() -> Element {
         window.set_visible(true);
     }
     use_future({
-        let window = window.clone();
         move || {
             let mut subscription = publication_subscription.clone();
-            let window = window.clone();
             async move {
                 let Some(subscription) = subscription.as_mut() else {
                     return;
                 };
                 project_current_publication(subscription, tray_available, |projection| {
-                    apply_publication(projection, &window, publication);
+                    apply_publication(projection, close_behavior, publication);
                 });
                 while subscription.changed().await.is_ok() {
                     project_current_publication(subscription, tray_available, |projection| {
-                        apply_publication(projection, &window, publication);
+                        apply_publication(projection, close_behavior, publication);
                     });
                 }
             }
         }
     });
 
+    use_wry_event_handler({
+        let window = window.clone();
+        let lifecycle = lifecycle.clone();
+        move |event, _| {
+            if matches!(event, Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if *window_id == window.id())
+                && *close_behavior.peek() == WindowCloseBehaviour::WindowCloses
+            {
+                request_application_exit(&lifecycle, &window);
+            }
+        }
+    });
+
     use_muda_event_handler({
         let window = window.clone();
-        let runtime = runtime.clone();
+        let lifecycle = lifecycle.clone();
         move |event| match event.id.0.as_str() {
             "quit" => {
-                runtime.request_shutdown();
-                window.set_close_behavior(WindowCloseBehaviour::WindowCloses);
-                window.close();
+                request_application_exit(&lifecycle, &window);
             }
             "open" => {
                 window.set_visible(true);
@@ -176,12 +187,30 @@ fn project_current_publication(
 
 fn apply_publication(
     projection: PublicationProjection,
-    window: &dioxus::desktop::DesktopContext,
+    mut close_behavior: Signal<WindowCloseBehaviour>,
     mut publication: Signal<Option<Arc<PublishedConfig>>>,
 ) {
     app_log::set_level(projection.log_level);
-    window.set_close_behavior(projection.close_behavior);
+    close_behavior.set(projection.close_behavior);
     publication.set(Some(projection.publication));
+}
+
+fn request_application_exit(
+    lifecycle: &ApplicationLifecycle,
+    window: &dioxus::desktop::DesktopContext,
+) {
+    let Some(completion) = lifecycle.begin_shutdown() else {
+        return;
+    };
+    window.set_visible(false);
+    let window = window.clone();
+    spawn(async move {
+        completion.await;
+        // Programmatic CloseWindow is distinct from native CloseRequested, so
+        // the final close is not intercepted by the handler above.
+        window.set_close_behavior(WindowCloseBehaviour::WindowCloses);
+        window.close();
+    });
 }
 
 fn effective_close_behavior(close_to_tray: bool, tray_available: bool) -> WindowCloseBehaviour {
