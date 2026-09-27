@@ -6,7 +6,8 @@ use dioxus_icons::lucide::{AppWindow, Plus};
 use crate::{
     CAPTURE_ARMED_SIGNAL, CAPTURE_GENERATION_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL,
     DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, cancel_capture,
-    config::{Automation, ConfigCoordinator, PublishedConfig},
+    components::PublishedConfigContext,
+    config::{Automation, ConfigCoordinator},
 };
 
 use super::{
@@ -28,7 +29,6 @@ pub(super) struct AutomationEditorProps {
     selected: Signal<Option<String>>,
     pending_delete: Signal<Option<String>>,
     pending_draft: Signal<Option<Automation>>,
-    publication: Signal<Arc<PublishedConfig>>,
 }
 
 #[component]
@@ -39,8 +39,8 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     let mut selected = props.selected;
     let mut pending_delete = props.pending_delete;
     let mut pending_draft = props.pending_draft;
-    let mut publication = props.publication;
-    let published = publication.read().clone();
+    let publication = consume_context::<PublishedConfigContext>();
+    let published = publication.required();
     let local_draft = pending_draft
         .read()
         .as_ref()
@@ -122,7 +122,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     });
     let sync_id = id.clone();
     use_effect(move || {
-        let published = publication.read().clone();
+        let published = publication.required();
         let pending = pending_draft
             .read()
             .as_ref()
@@ -198,7 +198,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     class: "button ghost",
                     disabled: dirty,
                     onclick: move |_| {
-                        let copy = duplicate_automation(&duplicate_publication.read(), &draft());
+                        let copy = duplicate_automation(&duplicate_publication.required(), &draft());
                         let copy_id = copy.id.clone();
                         pending_draft.set(Some(copy));
                         let token = format!("automation:{copy_id}");
@@ -225,7 +225,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                                 match delete_automation(&delete_coordinator, expected_revision(), &id) {
                                     Ok(published) => {
                                         expected_revision.set(published.revision());
-                                        publication.set(published);
+                                        publication.acknowledge(published);
                                         *DIRTY_EDITOR_SIGNAL.write() = None;
                                         *UNSAVED_ENTITY_SIGNAL.write() = None;
                                         pending_delete.set(None);
@@ -267,7 +267,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     div { class: "inline-empty", "No cases yet. Add a case or use an Otherwise action." }
                 }
                 for (case_index, case) in snapshot.cases.iter().cloned().enumerate() {
-                    CaseEditor { key: "{case.id}", draft, collapsed_matcher_groups, case_index, case, publication }
+                    CaseEditor { key: "{case.id}", draft, collapsed_matcher_groups, case_index, case }
                 }
             }
             section { class: "editor-card otherwise-card",
@@ -275,7 +275,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     button { class: "button secondary", onclick: move |_| add_action(&mut draft, None), Plus { size: 16, "aria-hidden": "true" } "Add action" }
                 }
                 for (action_index, action) in snapshot.otherwise_actions.iter().cloned().enumerate() {
-                    ActionEditor { key: "{action.id}", draft, case_index: None, action_index, action, publication }
+                    ActionEditor { key: "{action.id}", draft, case_index: None, action_index, action }
                 }
                 if snapshot.otherwise_actions.is_empty() { div { class: "inline-empty compact", "Optional. Leave empty to do nothing when no cases match." } }
             }
@@ -293,7 +293,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                         draft.set(durable);
                         base_revision.set(current.revision());
                         expected_revision.set(current.revision());
-                        publication.set(current);
+                        publication.acknowledge(current);
                         *DIRTY_EDITOR_SIGNAL.write() = None;
                         message.set(None);
                     } else {
@@ -316,7 +316,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                                     draft.set(saved);
                                 }
                                 base_revision.set(published.revision());
-                                publication.set(published);
+                                publication.acknowledge(published);
                                 pending_draft.set(None);
                                 *UNSAVED_ENTITY_SIGNAL.write() = None;
                                 *DIRTY_EDITOR_SIGNAL.write() = None;

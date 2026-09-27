@@ -45,10 +45,6 @@ impl DeviceDraft {
         self.cancel(published) && *self != previous
     }
 
-    pub(super) fn is_acknowledged_by(&self, published: &PublishedConfig) -> bool {
-        !self.is_new() && published.revision() >= self.revision
-    }
-
     pub(super) fn save(
         &mut self,
         coordinator: &ConfigCoordinator,
@@ -56,20 +52,18 @@ impl DeviceDraft {
         let id = self.edited.id.clone();
         let edited = self.edited.clone();
         let is_new = self.is_new();
-        let published = coordinator.update(self.revision, move |current| {
-            let mut candidate = current.clone();
-            if is_new {
-                candidate.devices.push(edited);
-            } else {
-                let index = candidate
-                    .devices
-                    .iter()
-                    .position(|device| device.id == id)
-                    .expect("a device cannot disappear from an unchanged revision");
-                candidate.devices[index] = edited;
-            }
-            candidate
-        })?;
+        let mut candidate = coordinator.editable_at_revision(self.revision)?;
+        if is_new {
+            candidate.devices.push(edited);
+        } else {
+            let index = candidate
+                .devices
+                .iter()
+                .position(|device| device.id == id)
+                .expect("a device cannot disappear from an unchanged revision");
+            candidate.devices[index] = edited;
+        }
+        let published = coordinator.update(self.revision, candidate)?;
         self.rebase(&published);
         Ok(published)
     }
@@ -103,12 +97,12 @@ impl DeviceDraft {
         }
 
         let id = self.edited.id.clone();
+        let mut candidate = coordinator
+            .editable_at_revision(self.revision)
+            .map_err(DeviceDeleteError::Coordinator)?;
+        candidate.devices.retain(|device| device.id != id);
         coordinator
-            .update(self.revision, move |current| {
-                let mut candidate = current.clone();
-                candidate.devices.retain(|device| device.id != id);
-                candidate
-            })
+            .update(self.revision, candidate)
             .map(Some)
             .map_err(DeviceDeleteError::Coordinator)
     }
@@ -125,20 +119,6 @@ impl DeviceDraft {
         self.durable = Some(device.clone());
         self.edited = device;
     }
-}
-
-pub(super) fn clear_published_pending(
-    pending: &mut Option<DeviceDraft>,
-    published: &PublishedConfig,
-) -> bool {
-    if pending
-        .as_ref()
-        .is_some_and(|draft| draft.is_acknowledged_by(published))
-    {
-        *pending = None;
-        return true;
-    }
-    false
 }
 
 #[derive(Debug)]

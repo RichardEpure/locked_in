@@ -108,8 +108,8 @@ fn stale_save_and_reload_error_keep_the_durable_publication() {
     let (directory, _store, _startup, coordinator) = coordinator();
     let initial = coordinator.current();
     let current = coordinator
-        .update(initial.revision(), |config| {
-            let mut next = config.clone();
+        .update(initial.revision(), {
+            let mut next = initial.editable().as_ref().clone();
             next.settings.close_to_tray = false;
             next
         })

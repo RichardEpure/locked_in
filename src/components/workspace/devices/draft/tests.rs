@@ -125,8 +125,8 @@ fn clean_editor_refreshes_device_and_base_revision_from_a_new_publication() {
     let published = coordinator.current();
     let mut draft = DeviceDraft::edit(published.revision(), initial.devices[0].clone());
     let refreshed = coordinator
-        .update(published.revision(), |current| {
-            let mut next = current.clone();
+        .update(published.revision(), {
+            let mut next = published.editable().as_ref().clone();
             next.devices[0].name = "Published keyboard".into();
             next
         })
@@ -150,8 +150,8 @@ fn dirty_editor_retains_its_draft_and_base_revision_when_publication_changes() {
     draft.edited.name = "Local keyboard".into();
     let before = draft.clone();
     let refreshed = coordinator
-        .update(published.revision(), |current| {
-            let mut next = current.clone();
+        .update(published.revision(), {
+            let mut next = published.editable().as_ref().clone();
             next.devices[0].name = "Published keyboard".into();
             next
         })
@@ -208,8 +208,8 @@ fn stale_save_retains_the_draft_and_reports_the_current_revision() {
     draft.edited.name = "Still editable".into();
     let before = draft.clone();
     coordinator
-        .update(published.revision(), |current| {
-            let mut next = current.clone();
+        .update(published.revision(), {
+            let mut next = published.editable().as_ref().clone();
             next.settings.start_minimized = false;
             next
         })
@@ -244,33 +244,6 @@ fn successful_save_publishes_the_device_exactly_once() {
 }
 
 #[test]
-fn saved_pending_draft_clears_once_its_publication_or_a_later_one_arrives() {
-    let (_directory, coordinator) = coordinator(EditableConfig::default());
-    let before_save = coordinator.current();
-    let mut draft = DeviceDraft::create(before_save.revision(), device("keyboard"));
-    let saved = draft.save(&coordinator).unwrap();
-    let mut pending = Some(draft.clone());
-
-    assert!(!clear_published_pending(&mut pending, &before_save));
-    assert_eq!(pending, Some(draft.clone()));
-    assert!(clear_published_pending(&mut pending, &saved));
-    assert_eq!(pending, None);
-    assert!(!clear_published_pending(&mut pending, &saved));
-
-    let later = coordinator
-        .update(saved.revision(), |current| {
-            let mut next = current.clone();
-            next.devices.clear();
-            next
-        })
-        .unwrap();
-    assert!(later.editable().devices.is_empty());
-    let mut coalesced_pending = Some(draft);
-    assert!(clear_published_pending(&mut coalesced_pending, &later));
-    assert_eq!(coalesced_pending, None);
-}
-
-#[test]
 fn references_block_delete_and_unreferenced_delete_publishes_once() {
     let initial = referenced_config();
     let (_directory, coordinator) = coordinator(initial.clone());
@@ -284,8 +257,8 @@ fn references_block_delete_and_unreferenced_delete_publishes_once() {
     assert_eq!(error.to_string(), "Used by: Typing");
     assert!(!blocked_subscription.has_changed().unwrap());
     let without_reference = coordinator
-        .update(published.revision(), |current| {
-            let mut next = current.clone();
+        .update(published.revision(), {
+            let mut next = published.editable().as_ref().clone();
             next.automations.clear();
             next
         })

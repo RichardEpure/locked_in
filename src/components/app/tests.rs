@@ -88,27 +88,28 @@ fn startup_projection_applies_the_current_publication_after_a_subscription_race(
     let mut receiver = coordinator.subscribe();
     startup.0.store(true, Ordering::SeqCst);
     let current = coordinator
-        .update(initial.revision(), |config| {
-            let mut next = config.clone();
+        .update(initial.revision(), {
+            let mut next = initial.editable().as_ref().clone();
             next.settings.close_to_tray = false;
             next.settings.log_level = LogLevel::Debug;
             next
         })
         .unwrap();
-    let projected = RefCell::new(None);
-
-    project_current_publication(&mut receiver, true, |projection| {
-        *projected.borrow_mut() = Some(projection);
+    let mut dom = VirtualDom::new(VNode::empty);
+    dom.rebuild_in_place();
+    dom.in_scope(ScopeId::ROOT, || {
+        let signal = Signal::new(Some(initial));
+        let close = Signal::new(WindowCloseBehaviour::WindowCloses);
+        let projection = PublishedConfigContext::new(signal, close, true);
+        projection.acknowledge(receiver.borrow_and_update().clone());
+        assert!(Arc::ptr_eq(&projection.required(), &current));
+        assert_eq!(
+            projection.required().editable().settings.log_level,
+            LogLevel::Debug
+        );
+        assert_eq!(*close.peek(), WindowCloseBehaviour::WindowCloses);
+        assert_eq!(projection.required().warnings().len(), 1);
     });
-
-    let projected = projected.into_inner().unwrap();
-    assert!(Arc::ptr_eq(&projected.publication, &current));
-    assert_eq!(projected.log_level, LogLevel::Debug);
-    assert!(matches!(
-        projected.close_behavior,
-        WindowCloseBehaviour::WindowCloses
-    ));
-    assert_eq!(projected.publication.warnings().len(), 1);
     assert!(!receiver.has_changed().unwrap());
 }
 

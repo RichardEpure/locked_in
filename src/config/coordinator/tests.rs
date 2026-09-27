@@ -243,10 +243,10 @@ fn initial_load_publishes_one_matching_immutable_revision() {
     assert_eq!(current.editable().as_ref(), &config);
     assert!(Arc::ptr_eq(&current, &subscribed));
     assert!(Arc::ptr_eq(current.editable(), subscribed.editable()));
-    assert!(Arc::ptr_eq(current.active(), subscribed.active()));
+    assert!(Arc::ptr_eq(current.compiled(), subscribed.compiled()));
     assert!(current.warnings().is_empty());
     let dispatches = current
-        .active()
+        .compiled()
         .evaluate_event(&Event::FocusedWindowChanged {
             window: FocusedWindow::default(),
             generation: 1,
@@ -268,9 +268,9 @@ fn update_orders_candidate_reconciliation_save_then_one_publication() {
         let coordinator = Arc::clone(&coordinator);
         let events = Arc::clone(&events);
         move || {
-            coordinator.update(INITIAL_REVISION, |current| {
+            coordinator.update(INITIAL_REVISION, {
                 record(&events, "build");
-                let mut candidate = current.clone();
+                let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
                 candidate.settings.start_with_windows = true;
                 candidate
             })
@@ -293,24 +293,19 @@ fn update_orders_candidate_reconciliation_save_then_one_publication() {
 }
 
 #[test]
-fn stale_revision_is_rejected_before_building_or_touching_dependencies() {
+fn stale_candidate_is_rejected_before_preparation_or_touching_dependencies() {
     let (coordinator, _, _, events) = coordinator(EditableConfig::default());
     coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_minimized = false;
             candidate
         })
         .unwrap();
     clear(&events);
-    let built = AtomicBool::new(false);
-
-    let error = coordinator
-        .update(INITIAL_REVISION, |current| {
-            built.store(true, Ordering::SeqCst);
-            current.clone()
-        })
-        .unwrap_err();
+    let mut invalid = EditableConfig::default();
+    invalid.devices.push(Device::default());
+    let error = coordinator.update(INITIAL_REVISION, invalid).unwrap_err();
 
     assert!(matches!(
         error,
@@ -319,30 +314,19 @@ fn stale_revision_is_rejected_before_building_or_touching_dependencies() {
             actual,
         } if actual == INITIAL_REVISION + 1
     ));
-    assert!(!built.load(Ordering::SeqCst));
     assert!(event_snapshot(&events).is_empty());
 }
 
 #[test]
-fn builder_can_reenter_the_coordinator_without_deadlock() {
+fn candidate_built_before_another_commit_cannot_overwrite_it() {
     let (coordinator, store, _, events) = coordinator(EditableConfig::default());
 
-    let error = coordinator
-        .update(INITIAL_REVISION, |outer_base| {
-            let nested = coordinator
-                .update(INITIAL_REVISION, |current| {
-                    let mut candidate = current.clone();
-                    candidate.settings.start_minimized = false;
-                    candidate
-                })
-                .unwrap();
-            assert_eq!(nested.revision(), INITIAL_REVISION + 1);
-
-            let mut candidate = outer_base.clone();
-            candidate.settings.close_to_tray = false;
-            candidate
-        })
-        .unwrap_err();
+    let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
+    let mut competing = candidate.clone();
+    competing.settings.start_minimized = false;
+    coordinator.update(INITIAL_REVISION, competing).unwrap();
+    candidate.settings.close_to_tray = false;
+    let error = coordinator.update(INITIAL_REVISION, candidate).unwrap_err();
 
     assert!(matches!(
         error,
@@ -361,7 +345,6 @@ fn adapter_and_store_mutation_reentry_is_rejected_without_deadlock() {
     let (coordinator, store, start_with_windows, _) = coordinator(EditableConfig::default());
     let adapter_rejected = Arc::new(AtomicBool::new(false));
     let store_rejected = Arc::new(AtomicBool::new(false));
-    let nested_builder_called = Arc::new(AtomicBool::new(false));
 
     start_with_windows.on_reconcile({
         let coordinator = Arc::downgrade(&coordinator);
@@ -381,15 +364,11 @@ fn adapter_and_store_mutation_reentry_is_rejected_without_deadlock() {
     store.on_save({
         let coordinator = Arc::downgrade(&coordinator);
         let store_rejected = Arc::clone(&store_rejected);
-        let nested_builder_called = Arc::clone(&nested_builder_called);
         Arc::new(move || {
             let coordinator = coordinator.upgrade().unwrap();
             store_rejected.store(
                 matches!(
-                    coordinator.update(INITIAL_REVISION, |current| {
-                        nested_builder_called.store(true, Ordering::SeqCst);
-                        current.clone()
-                    }),
+                    coordinator.update(INITIAL_REVISION, EditableConfig::default()),
                     Err(ConfigCoordinatorError::ReentrantOperation)
                 ),
                 Ordering::SeqCst,
@@ -398,8 +377,8 @@ fn adapter_and_store_mutation_reentry_is_rejected_without_deadlock() {
     });
 
     let published = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.close_to_tray = false;
             candidate
         })
@@ -408,7 +387,6 @@ fn adapter_and_store_mutation_reentry_is_rejected_without_deadlock() {
     assert_eq!(published.revision(), INITIAL_REVISION + 1);
     assert!(adapter_rejected.load(Ordering::SeqCst));
     assert!(store_rejected.load(Ordering::SeqCst));
-    assert!(!nested_builder_called.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -418,9 +396,9 @@ fn validation_or_compilation_failure_never_calls_the_os_or_store() {
     let subscription = coordinator.subscribe();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
+        .update(INITIAL_REVISION, {
             record(&events, "build");
-            let mut candidate = current.clone();
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate.devices.push(Device::default());
             candidate
@@ -446,9 +424,9 @@ fn store_failure_keeps_prior_publication_revision_and_disk() {
     let subscription = coordinator.subscribe();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
+        .update(INITIAL_REVISION, {
             record(&events, "build");
-            let mut candidate = current.clone();
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.close_to_tray = false;
             candidate
         })
@@ -481,8 +459,8 @@ fn successful_os_change_followed_by_save_failure_rolls_back() {
     let subscription = coordinator.subscribe();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate.settings.close_to_tray = false;
             candidate
@@ -516,8 +494,8 @@ fn unconfirmed_rollback_is_reported_without_claiming_restoration() {
     store.fail_save();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate
         })
@@ -554,8 +532,8 @@ fn failed_rollback_reports_the_confirmed_actual_state() {
     store.fail_save();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate
         })
@@ -588,8 +566,8 @@ fn unconfirmed_requested_state_is_never_saved_or_published() {
     let subscription = coordinator.subscribe();
 
     let error = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate.settings.close_to_tray = false;
             candidate
@@ -629,8 +607,8 @@ fn concurrent_updates_are_serialized_and_the_loser_is_stale() {
     let first = thread::spawn({
         let coordinator = Arc::clone(&coordinator);
         move || {
-            coordinator.update(INITIAL_REVISION, |current| {
-                let mut candidate = current.clone();
+            coordinator.update(INITIAL_REVISION, {
+                let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
                 candidate.settings.start_minimized = false;
                 candidate
             })
@@ -642,10 +620,12 @@ fn concurrent_updates_are_serialized_and_the_loser_is_stale() {
     let second = thread::spawn({
         let coordinator = Arc::clone(&coordinator);
         move || {
-            coordinator.update(INITIAL_REVISION, |current| {
+            coordinator.update(INITIAL_REVISION, {
+                let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
                 second_built.send(()).unwrap();
-                let mut candidate = current.clone();
                 candidate.settings.close_to_tray = false;
+                // A losing candidate must be stale even if its preparation would fail.
+                candidate.devices.push(Device::default());
                 candidate
             })
         }
@@ -802,8 +782,8 @@ fn failed_enable_preserves_other_edits_and_persists_confirmed_false() {
     start_with_windows.push(StartWithWindowsOutcome::warning(false, "access denied"));
 
     let published = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = true;
             candidate.settings.close_to_tray = false;
             candidate
@@ -824,8 +804,8 @@ fn failed_disable_preserves_other_edits_and_persists_confirmed_true() {
     start_with_windows.push(StartWithWindowsOutcome::warning(true, "removal failed"));
 
     let published = coordinator
-        .update(INITIAL_REVISION, |current| {
-            let mut candidate = current.clone();
+        .update(INITIAL_REVISION, {
+            let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
             candidate.settings.start_with_windows = false;
             candidate.settings.start_minimized = false;
             candidate

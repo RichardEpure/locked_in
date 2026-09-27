@@ -1,11 +1,11 @@
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{ArrowDown, ArrowUp, Plus, Trash2};
 
 use crate::{
     CAPTURE_TARGET_SIGNAL, cancel_capture,
-    config::{Automation, AutomationCase, PublishedConfig},
+    config::{Automation, AutomationCase},
 };
 
 use super::{action_editor::ActionEditor, matcher_group::MatcherGroup, mutations::add_action};
@@ -16,7 +16,6 @@ pub(super) struct CaseEditorProps {
     collapsed_matcher_groups: Signal<HashSet<(String, bool)>>,
     case_index: usize,
     case: AutomationCase,
-    publication: Signal<Arc<PublishedConfig>>,
 }
 
 #[component]
@@ -55,7 +54,7 @@ pub(super) fn CaseEditor(props: CaseEditorProps) -> Element {
                     button { class: "button secondary small", onclick: move |_| add_action(&mut draft, Some(case_index)), Plus { size: 15, "aria-hidden": "true" } "Add action" }
                 }
                 for (action_index, action) in case.actions.iter().cloned().enumerate() {
-                    ActionEditor { key: "{action.id}", draft, case_index: Some(case_index), action_index, action, publication: props.publication }
+                    ActionEditor { key: "{action.id}", draft, case_index: Some(case_index), action_index, action }
                 }
                 if case.actions.is_empty() { div { class: "inline-empty compact", "No report actions configured." } }
             }

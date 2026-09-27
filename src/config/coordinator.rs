@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 use tokio::sync::watch;
 
-use super::{ActiveConfig, EditableConfig, ValidationError, store::ConfigStore};
+use super::{CompiledConfig, EditableConfig, ValidationError, store::ConfigStore};
 
 const INITIAL_REVISION: u64 = 1;
 
@@ -101,11 +101,27 @@ pub enum ConfigWarning {
 pub struct PublishedConfig {
     revision: u64,
     editable: Arc<EditableConfig>,
-    active: Arc<ActiveConfig>,
+    compiled: Arc<CompiledConfig>,
     warnings: Arc<[ConfigWarning]>,
 }
 
 impl PublishedConfig {
+    #[cfg(test)]
+    pub(crate) fn prepare_for_test(
+        editable: EditableConfig,
+        revision: u64,
+    ) -> Result<Arc<Self>, Vec<ValidationError>> {
+        let compiled = CompiledConfig::compile(&editable)?;
+        Ok(Arc::new(
+            PreparedConfig {
+                editable,
+                compiled,
+                warnings: Vec::new(),
+            }
+            .publish(revision),
+        ))
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -114,8 +130,8 @@ impl PublishedConfig {
         &self.editable
     }
 
-    pub fn active(&self) -> &Arc<ActiveConfig> {
-        &self.active
+    pub fn compiled(&self) -> &Arc<CompiledConfig> {
+        &self.compiled
     }
 
     pub fn warnings(&self) -> &[ConfigWarning] {
@@ -234,14 +250,6 @@ struct OperationAdmission {
 }
 
 impl OperationAdmission {
-    fn reject_reentrant(&self) -> std::result::Result<(), ConfigCoordinatorError> {
-        let state = self.lock_state();
-        if state.owner == Some(thread::current().id()) {
-            return Err(ConfigCoordinatorError::ReentrantOperation);
-        }
-        Ok(())
-    }
-
     fn enter(&self) -> std::result::Result<OperationGuard<'_>, ConfigCoordinatorError> {
         let owner = thread::current().id();
         let mut state = self.lock_state();
@@ -336,20 +344,22 @@ impl ConfigCoordinator {
         self.publications.subscribe()
     }
 
+    /// Obtain the exact base for an editor's candidate. Update rechecks the revision
+    /// under admission, since another writer may commit while the caller edits it.
+    pub fn editable_at_revision(
+        &self,
+        expected: u64,
+    ) -> std::result::Result<EditableConfig, ConfigCoordinatorError> {
+        let current = self.current();
+        check_revision(expected, current.revision())?;
+        Ok(current.editable().as_ref().clone())
+    }
+
     pub fn update(
         &self,
         expected_revision: u64,
-        build: impl FnOnce(&EditableConfig) -> EditableConfig,
+        candidate: EditableConfig,
     ) -> std::result::Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
-        self.admission.reject_reentrant()?;
-        let base = self.current();
-        check_revision(expected_revision, base.revision)?;
-
-        let candidate = build(&base.editable);
-        // ActiveConfig compiles automations and devices only, so the later confirmed startup
-        // setting can replace the requested boolean without invalidating this snapshot.
-        let compiled = ActiveConfig::compile(&candidate);
-
         let _operation = self.admission.enter()?;
         let current = self.current();
         check_revision(expected_revision, current.revision)?;
@@ -357,14 +367,18 @@ impl ConfigCoordinator {
             .revision
             .checked_add(1)
             .ok_or(ConfigCoordinatorError::RevisionOverflow)?;
-        let active = compiled.map_err(|errors| ConfigCoordinatorError::InvalidConfig {
-            errors,
-            warnings: Box::new([]),
+        // Settings are not part of the compiled rules, so Windows reconciliation can
+        // correct its confirmed boolean without invalidating the prepared rules.
+        let compiled = CompiledConfig::compile(&candidate).map_err(|errors| {
+            ConfigCoordinatorError::InvalidConfig {
+                errors,
+                warnings: Box::new([]),
+            }
         })?;
 
         let prepared = prepare_update(
             candidate,
-            active,
+            compiled,
             current.editable.settings.start_with_windows,
             self.store.as_ref(),
             self.start_with_windows.as_ref(),
@@ -415,7 +429,7 @@ fn check_revision(expected: u64, actual: u64) -> std::result::Result<(), ConfigC
 
 struct PreparedConfig {
     editable: EditableConfig,
-    active: ActiveConfig,
+    compiled: CompiledConfig,
     warnings: Vec<ConfigWarning>,
 }
 
@@ -424,7 +438,7 @@ impl PreparedConfig {
         PublishedConfig {
             revision,
             editable: Arc::new(self.editable),
-            active: Arc::new(self.active),
+            compiled: Arc::new(self.compiled),
             warnings: self.warnings.into(),
         }
     }
@@ -436,7 +450,7 @@ fn prepare_loaded(
     store: &dyn CoordinatorStore,
     start_with_windows: &dyn StartWithWindows,
 ) -> std::result::Result<PreparedConfig, ConfigCoordinatorError> {
-    let active = ActiveConfig::compile(&editable).map_err(|errors| {
+    let compiled = CompiledConfig::compile(&editable).map_err(|errors| {
         ConfigCoordinatorError::InvalidConfig {
             errors,
             warnings: Box::new([]),
@@ -468,14 +482,14 @@ fn prepare_loaded(
 
     Ok(PreparedConfig {
         editable,
-        active,
+        compiled,
         warnings,
     })
 }
 
 fn prepare_update(
     mut editable: EditableConfig,
-    active: ActiveConfig,
+    compiled: CompiledConfig,
     previous_start_with_windows: bool,
     store: &dyn CoordinatorStore,
     start_with_windows: &dyn StartWithWindows,
@@ -511,7 +525,7 @@ fn prepare_update(
 
     Ok(PreparedConfig {
         editable,
-        active,
+        compiled,
         warnings,
     })
 }

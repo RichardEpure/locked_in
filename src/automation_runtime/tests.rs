@@ -14,8 +14,8 @@ use super::{
 };
 use crate::{
     config::{
-        ActiveConfig, Automation, AutomationCase, Config, Device, SendAction, TextCondition,
-        ValidationError, WindowMatcher,
+        Automation, AutomationCase, Device, EditableConfig, PublishedConfig, SendAction,
+        TextCondition, ValidationError, WindowMatcher,
     },
     focused_window::{FocusedWindow, ForegroundObservation},
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
@@ -26,32 +26,69 @@ pub(super) struct ClaimGate {
     release: mpsc::Receiver<()>,
 }
 
+#[derive(Clone)]
+struct TestRuntime {
+    runtime: AutomationRuntime,
+    publications: Option<tokio::sync::watch::Sender<Arc<PublishedConfig>>>,
+}
+
+impl std::ops::Deref for TestRuntime {
+    type Target = AutomationRuntime;
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+fn publication_channel(
+    config: Option<EditableConfig>,
+) -> anyhow::Result<Option<tokio::sync::watch::Sender<Arc<PublishedConfig>>>> {
+    config
+        .map(|config| {
+            PublishedConfig::prepare_for_test(config, 1)
+                .map(|publication| tokio::sync::watch::channel(publication).0)
+        })
+        .transpose()
+        .map_err(format_compilation_errors)
+}
+
 impl AutomationRuntime {
-    fn start(
-        initial_config: Option<Config>,
+    fn start_with_config(
+        initial_config: Option<EditableConfig>,
         focused_window: FocusInput,
         backend: impl HidBackend,
-    ) -> anyhow::Result<(Self, RuntimeOwner)> {
-        let initial_config = initial_config
-            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
-            .transpose()
-            .map_err(format_compilation_errors)?;
-        Self::start_active(initial_config, RuntimeInputs { focused_window }, backend)
+    ) -> anyhow::Result<(TestRuntime, RuntimeOwner)> {
+        let publications = publication_channel(initial_config)?;
+        let receiver = publications
+            .as_ref()
+            .map(tokio::sync::watch::Sender::subscribe);
+        let (runtime, owner) = Self::start(receiver, RuntimeInputs { focused_window }, backend)?;
+        Ok((
+            TestRuntime {
+                runtime,
+                publications,
+            },
+            owner,
+        ))
     }
 
     fn start_with_initialization_claim_gate(
-        initial_config: Option<Config>,
+        initial_config: Option<EditableConfig>,
         focused_window: FocusInput,
         backend: impl HidBackend,
-    ) -> anyhow::Result<(Self, RuntimeOwner, mpsc::Receiver<()>, mpsc::Sender<()>)> {
+    ) -> anyhow::Result<(
+        TestRuntime,
+        RuntimeOwner,
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+    )> {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let initial_config = initial_config
-            .map(|config| ActiveConfig::compile(&config).map(Arc::new))
-            .transpose()
-            .map_err(format_compilation_errors)?;
-        let (runtime, owner) = Self::start_active_inner(
-            initial_config,
+        let publications = publication_channel(initial_config)?;
+        let receiver = publications
+            .as_ref()
+            .map(tokio::sync::watch::Sender::subscribe);
+        let (runtime, owner) = Self::start_inner(
+            receiver,
             RuntimeInputs { focused_window },
             backend,
             Some(ClaimGate {
@@ -59,15 +96,15 @@ impl AutomationRuntime {
                 release: release_rx,
             }),
         )?;
-        Ok((runtime, owner, started_rx, release_tx))
-    }
-
-    pub(crate) fn active_config_snapshot(&self) -> Option<Arc<ActiveConfig>> {
-        self.shared
-            .config
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        Ok((
+            TestRuntime {
+                runtime,
+                publications,
+            },
+            owner,
+            started_rx,
+            release_tx,
+        ))
     }
 
     fn status(&self) -> RuntimeStatus {
@@ -133,11 +170,13 @@ fn format_compilation_errors(errors: Vec<ValidationError>) -> anyhow::Error {
 }
 
 fn replace_config_for_test(
-    runtime: &AutomationRuntime,
-    config: Config,
+    runtime: &TestRuntime,
+    config: EditableConfig,
 ) -> std::result::Result<(), Vec<ValidationError>> {
-    let active = Arc::new(ActiveConfig::compile(&config)?);
-    runtime.replace_active_config(active);
+    let sender = runtime.publications.as_ref().unwrap();
+    let revision = sender.borrow().revision() + 1;
+    let published = PublishedConfig::prepare_for_test(config, revision)?;
+    sender.send_replace(published);
     Ok(())
 }
 
@@ -261,9 +300,9 @@ fn action(report: u8) -> SendAction {
     }
 }
 
-fn config(report: u8, device_ids: &[&str]) -> Config {
+fn config(report: u8, device_ids: &[&str]) -> EditableConfig {
     let devices = device_ids.iter().map(|id| device(id)).collect::<Vec<_>>();
-    Config {
+    EditableConfig {
         devices,
         automations: vec![Automation {
             id: "automation".to_string(),
@@ -287,12 +326,12 @@ fn config(report: u8, device_ids: &[&str]) -> Config {
             }],
             ..Automation::default()
         }],
-        ..Config::default()
+        ..EditableConfig::default()
     }
 }
 
-fn routed_config(routes: &[(&str, u8)]) -> Config {
-    Config {
+fn routed_config(routes: &[(&str, u8)]) -> EditableConfig {
+    EditableConfig {
         devices: vec![device("automatic")],
         automations: vec![Automation {
             id: "automation".to_string(),
@@ -320,7 +359,7 @@ fn routed_config(routes: &[(&str, u8)]) -> Config {
                 .collect(),
             ..Automation::default()
         }],
-        ..Config::default()
+        ..EditableConfig::default()
     }
 }
 
@@ -336,11 +375,11 @@ fn focused(generation: u64, title: &str) -> ForegroundObservation {
 }
 
 fn start(
-    config: Option<Config>,
+    config: Option<EditableConfig>,
     focus_rx: tokio::sync::watch::Receiver<ForegroundObservation>,
     backend: RecordingBackend,
-) -> (AutomationRuntime, RuntimeOwner) {
-    AutomationRuntime::start(
+) -> (TestRuntime, RuntimeOwner) {
+    AutomationRuntime::start_with_config(
         config,
         FocusInput::new(focus_rx, EventSourceState::Available),
         backend,
@@ -349,13 +388,13 @@ fn start(
 }
 
 fn start_with_progress(
-    config: Option<Config>,
+    config: Option<EditableConfig>,
     focus_rx: tokio::sync::watch::Receiver<ForegroundObservation>,
     backend: RecordingBackend,
-) -> (AutomationRuntime, RuntimeOwner, FocusProgress) {
+) -> (TestRuntime, RuntimeOwner, FocusProgress) {
     let focus = FocusInput::new(focus_rx, EventSourceState::Available);
     let progress = focus.progress();
-    let (runtime, owner) = AutomationRuntime::start(config, focus, backend).unwrap();
+    let (runtime, owner) = AutomationRuntime::start_with_config(config, focus, backend).unwrap();
     (runtime, owner, progress)
 }
 
@@ -609,6 +648,68 @@ fn config_replacement_completed_before_claim_supplies_the_focus_snapshot() {
         BackendEvent::Send("automatic".to_string(), vec![0x20])
     );
     owner.shutdown_and_join(Duration::from_secs(1));
+}
+
+#[test]
+fn coordinator_publication_closes_startup_and_claim_gaps_and_survives_source_closure() {
+    use crate::config::{
+        ConfigCoordinator, ConfigStore, StartWithWindows, StartWithWindowsOutcome,
+    };
+    struct Startup;
+    impl StartWithWindows for Startup {
+        fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
+            StartWithWindowsOutcome::confirmed(desired)
+        }
+    }
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = Directory(std::env::temp_dir().join(format!(
+        "locked-in-runtime-publication-{}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(&directory.0).unwrap();
+    let store = Arc::new(ConfigStore::new(directory.0.join("config.toml")));
+    store.save_for_test(&config(0x10, &["automatic"])).unwrap();
+    let coordinator = ConfigCoordinator::initial_load(store, Arc::new(Startup)).unwrap();
+    let publications = coordinator.subscribe();
+    // Publication after subscribing but before starting the worker must be visible.
+    coordinator.update(1, config(0x20, &["automatic"])).unwrap();
+    let (focus_tx, focus_rx) = tokio::sync::watch::channel(focused(1, "target"));
+    let (backend, events) = backend([ready(1)]);
+    let (runtime, owner) = AutomationRuntime::start(
+        Some(publications),
+        RuntimeInputs {
+            focused_window: FocusInput::new(focus_rx, EventSourceState::Available),
+        },
+        backend,
+    )
+    .unwrap();
+    finish_startup(&runtime, &events, 1);
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        BackendEvent::Send("automatic".into(), vec![0x20])
+    );
+    let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
+    focus_tx.send_replace(focused(2, "target newer"));
+    claim_reached.recv_timeout(Duration::from_secs(2)).unwrap();
+    coordinator.update(2, config(0x30, &["automatic"])).unwrap();
+    drop(coordinator);
+    release_claim.send(()).unwrap();
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        BackendEvent::Send("automatic".into(), vec![0x30])
+    );
+    focus_tx.send_replace(focused(3, "target after closure"));
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        BackendEvent::Send("automatic".into(), vec![0x30])
+    );
+    owner.shutdown_and_join(Duration::from_secs(1));
+    assert!(events.try_recv().is_err());
 }
 
 #[test]
@@ -1305,7 +1406,7 @@ fn missing_focus_source_or_configuration_is_unavailable() {
         } else {
             EventSourceState::Unavailable("hook failed".to_string())
         };
-        let (runtime, owner) = AutomationRuntime::start(
+        let (runtime, owner) = AutomationRuntime::start_with_config(
             has_config.then(|| config(1, &["one"])),
             FocusInput::new(focus_rx, source),
             backend,

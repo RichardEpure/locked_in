@@ -70,8 +70,8 @@ fn seed_automation(
 ) -> Arc<PublishedConfig> {
     let current = coordinator.current();
     coordinator
-        .update(current.revision(), move |editable| {
-            let mut next = editable.clone();
+        .update(current.revision(), {
+            let mut next = current.editable().as_ref().clone();
             next.automations.push(automation);
             next
         })
@@ -121,8 +121,8 @@ fn stale_save_preserves_the_draft_and_durable_automation() {
     draft.name = "Preserved draft".into();
     let expected_draft = draft.clone();
     coordinator
-        .update(durable.revision(), |editable| {
-            let mut next = editable.clone();
+        .update(durable.revision(), {
+            let mut next = durable.editable().as_ref().clone();
             next.settings.start_minimized = !next.settings.start_minimized;
             next
         })
@@ -207,8 +207,8 @@ fn action_destinations_follow_the_supplied_publication_revision() {
     let initial = coordinator.current();
     assert!(action_destinations(&initial).is_empty());
     let published = coordinator
-        .update(initial.revision(), |editable| {
-            let mut next = editable.clone();
+        .update(initial.revision(), {
+            let mut next = initial.editable().as_ref().clone();
             next.devices.push(Device {
                 id: "deck".into(),
                 name: "Deck".into(),

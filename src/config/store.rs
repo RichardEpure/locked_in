@@ -2,21 +2,19 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 
-use super::{EditableConfig, encoding, validation};
+use super::{EditableConfig, encoding};
 
 static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(0);
 
 pub struct ConfigStore {
     path: PathBuf,
-    access: Mutex<()>,
     #[cfg(test)]
     hooks: TestHooks,
 }
@@ -25,7 +23,6 @@ impl ConfigStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            access: Mutex::new(()),
             #[cfg(test)]
             hooks: TestHooks::default(),
         }
@@ -35,15 +32,13 @@ impl ConfigStore {
     fn with_hooks(path: impl Into<PathBuf>, hooks: TestHooks) -> Self {
         Self {
             path: path.into(),
-            access: Mutex::new(()),
             hooks,
         }
     }
 
     pub(super) fn load(&self) -> Result<EditableConfig> {
-        let _guard = self.lock()?;
         match fs::read_to_string(&self.path) {
-            Ok(contents) => self.decode_and_validate(&contents),
+            Ok(contents) => self.decode(&contents),
             Err(error) if error.kind() == ErrorKind::NotFound => self.initialize_missing(),
             Err(error) => {
                 Err(error).with_context(|| format!("Failed to load {}", self.path.display()))
@@ -52,7 +47,6 @@ impl ConfigStore {
     }
 
     pub(super) fn save(&self, config: &EditableConfig) -> Result<()> {
-        let _guard = self.lock()?;
         let temporary = self.prepare_temporary(config)?;
         self.before_install();
         replace_file(temporary.path(), &self.path)
@@ -68,17 +62,9 @@ impl ConfigStore {
         self.save(config)
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
-        self.access
-            .lock()
-            .map_err(|_| anyhow!("Configuration store lock is poisoned"))
-    }
-
-    fn decode_and_validate(&self, contents: &str) -> Result<EditableConfig> {
-        let config = encoding::decode(contents)
-            .with_context(|| format!("Failed to load {}", self.path.display()))?;
-        validate(&config)?;
-        Ok(config)
+    fn decode(&self, contents: &str) -> Result<EditableConfig> {
+        encoding::decode(contents)
+            .with_context(|| format!("Failed to load {}", self.path.display()))
     }
 
     fn initialize_missing(&self) -> Result<EditableConfig> {
@@ -93,13 +79,12 @@ impl ConfigStore {
             InstallOutcome::DestinationExists => {
                 let contents = fs::read_to_string(&self.path)
                     .with_context(|| format!("Failed to load {}", self.path.display()))?;
-                self.decode_and_validate(&contents)
+                self.decode(&contents)
             }
         }
     }
 
     fn prepare_temporary(&self, config: &EditableConfig) -> Result<TemporaryFile> {
-        validate(config)?;
         let contents = encoding::encode(config).context("Failed to serialize config")?;
         let parent = self
             .path
@@ -124,14 +109,6 @@ impl ConfigStore {
             hook();
         }
     }
-}
-
-fn validate(config: &EditableConfig) -> Result<()> {
-    let errors = config.validate();
-    if !errors.is_empty() {
-        bail!(validation::format_errors(&errors));
-    }
-    Ok(())
 }
 
 struct TemporaryFile {

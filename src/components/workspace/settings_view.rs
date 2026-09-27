@@ -76,6 +76,7 @@ pub(super) fn SettingsView() -> Element {
                             let coordinator = coordinator.clone();
                             move |_| match reload_settings(&coordinator) {
                                 Ok(reloaded) => {
+                                    publication_context.acknowledge(reloaded.clone());
                                     let warning = config_warning_message(reloaded.warnings());
                                     let settings = reloaded.editable().settings.clone();
                                     base.set(reloaded);
@@ -116,6 +117,7 @@ pub(super) fn SettingsView() -> Element {
                         let coordinator = coordinator.clone();
                         move |_| match save_settings(&coordinator, expected_revision, draft()) {
                             Ok(saved) => {
+                                publication_context.acknowledge(saved.clone());
                                 let warning = config_warning_message(saved.warnings());
                                 let settings = saved.editable().settings.clone();
                                 base.set(saved);
@@ -145,11 +147,9 @@ fn save_settings(
     expected_revision: u64,
     settings: Settings,
 ) -> Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
-    coordinator.update(expected_revision, move |current| {
-        let mut candidate = current.clone();
-        candidate.settings = settings;
-        candidate
-    })
+    let mut candidate = coordinator.editable_at_revision(expected_revision)?;
+    candidate.settings = settings;
+    coordinator.update(expected_revision, candidate)
 }
 
 fn reload_settings(

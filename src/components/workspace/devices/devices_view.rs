@@ -8,15 +8,11 @@ use crate::{
     hid::{HidInventory, HidRefreshState},
 };
 
-use super::{
-    device_editor::DeviceEditor,
-    discovery_row::DiscoveryRow,
-    draft::{DeviceDraft, clear_published_pending},
-};
+use super::{device_editor::DeviceEditor, discovery_row::DiscoveryRow, draft::DeviceDraft};
+use crate::components::PublishedConfigContext;
 use crate::components::workspace::{
     empty_state::EmptyState,
     hid_inventory::{HidInventoryContext, hid_presence_view},
-    published_config::PublishedConfigContext,
     selection::SelectionProps,
 };
 
@@ -45,7 +41,7 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
     let runtime = consume_context::<AutomationRuntime>();
     let inventory_context = consume_context::<HidInventoryContext>();
     let publication_context = consume_context::<PublishedConfigContext>();
-    let published = publication_context.current();
+    let published = publication_context.required();
     let inventory = inventory_context.current();
     let mut selected = props.selected;
     let mut pending_draft = use_signal(|| None::<DeviceDraft>);
@@ -128,13 +124,6 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
     let create_config = published.editable().clone();
     let create_revision = published.revision();
-    use_effect(move || {
-        let publication = publication_context.current();
-        let mut pending = pending_draft();
-        if clear_published_pending(&mut pending, &publication) {
-            pending_draft.set(pending);
-        }
-    });
     use_effect(move || {
         let selected_id = selected();
         let is_open = discovery_open();

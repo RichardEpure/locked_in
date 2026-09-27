@@ -5,11 +5,15 @@ use crate::{
     CAPTURE_GENERATION_SIGNAL, CAPTURED_WINDOW_SIGNAL, DIRTY_EDITOR_SIGNAL, cancel_capture,
 };
 
-use super::automations::{commit_captured_matcher, use_config_publication};
+use super::automations::commit_captured_matcher;
+use crate::{components::PublishedConfigContext, config::ConfigCoordinator};
+use std::sync::Arc;
 
 #[component]
 pub(super) fn CaptureDialog() -> Element {
-    let (coordinator, mut publication) = use_config_publication();
+    let coordinator = consume_context::<Option<Arc<ConfigCoordinator>>>()
+        .expect("configuration coordinator is available after bootstrap");
+    let publication = consume_context::<PublishedConfigContext>();
     let generation = *CAPTURE_GENERATION_SIGNAL.read();
     let captured = CAPTURED_WINDOW_SIGNAL
         .read()
@@ -21,7 +25,7 @@ pub(super) fn CaptureDialog() -> Element {
     let mut case_id = use_signal(String::new);
     let mut exception = use_signal(|| false);
     let mut message = use_signal(String::new);
-    let published = publication.read().clone();
+    let published = publication.required();
     let config = published.editable();
     let selected_cases = config
         .automations
@@ -68,10 +72,10 @@ pub(super) fn CaptureDialog() -> Element {
                             message.set("Save or cancel the open draft, or use Capture next inside that editor".into());
                             return;
                         }
-                        let expected_revision = publication.read().revision();
+                        let expected_revision = publication.required().revision();
                         match commit_captured_matcher(&coordinator, expected_revision, &target_automation_id, &case_id(), exception(), &captured) {
                             Ok(published) => {
-                                publication.set(published);
+                                publication.acknowledge(published);
                                 cancel_capture();
                             }
                             Err(error) => message.set(format!("Could not save matcher; your capture and selections are preserved: {error}")),

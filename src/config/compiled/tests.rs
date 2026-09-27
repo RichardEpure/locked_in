@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::config::{Automation, AutomationCase};
+use crate::config::{
+    Automation, AutomationCase, MatchOperator, SendAction, TextCondition, WindowMatcher,
+};
+
+#[path = "behavior_tests.rs"]
+mod behavior;
 
 fn device(id: &str, name: &str, vid: u16) -> Device {
     Device {
@@ -47,7 +52,7 @@ fn action(id: &str, label: &str, report: u8, device_ids: &[&str]) -> SendAction 
     }
 }
 
-fn parity_config() -> EditableConfig {
+fn ordered_config() -> EditableConfig {
     EditableConfig {
         devices: vec![
             device("keyboard", "Keyboard", 0x1111),
@@ -141,33 +146,11 @@ fn parity_config() -> EditableConfig {
 struct DispatchSnapshot {
     automation: String,
     case: String,
-    label: String,
     report: Vec<u8>,
     destinations: Vec<String>,
 }
 
-fn editable_snapshots(config: &EditableConfig, window: &FocusedWindow) -> Vec<DispatchSnapshot> {
-    config
-        .evaluate_event(&Event::FocusedWindowChanged {
-            window: window.clone(),
-            generation: 1,
-        })
-        .into_iter()
-        .map(|dispatch| DispatchSnapshot {
-            automation: dispatch.automation_name.into(),
-            case: dispatch.case_name.into(),
-            label: dispatch.action.label.clone(),
-            report: dispatch.action.report.clone(),
-            destinations: dispatch
-                .devices
-                .iter()
-                .map(|device| device.id.clone())
-                .collect(),
-        })
-        .collect()
-}
-
-fn active_snapshots(config: &ActiveConfig, window: &FocusedWindow) -> Vec<DispatchSnapshot> {
+fn compiled_snapshots(config: &CompiledConfig, window: &FocusedWindow) -> Vec<DispatchSnapshot> {
     config
         .evaluate_event(&Event::FocusedWindowChanged {
             window: window.clone(),
@@ -177,7 +160,6 @@ fn active_snapshots(config: &ActiveConfig, window: &FocusedWindow) -> Vec<Dispat
         .map(|dispatch| DispatchSnapshot {
             automation: dispatch.automation_name().into(),
             case: dispatch.case_name().into(),
-            label: dispatch.action_label().into(),
             report: dispatch.report().into(),
             destinations: dispatch
                 .destinations()
@@ -189,9 +171,12 @@ fn active_snapshots(config: &ActiveConfig, window: &FocusedWindow) -> Vec<Dispat
 }
 
 #[test]
-fn active_evaluation_preserves_editable_semantics_and_all_declared_orders() {
-    let editable = parity_config();
-    let active = ActiveConfig::compile(&editable).unwrap();
+fn compiled_evaluation_preserves_all_declared_orders_and_exception_fallthrough() {
+    let mut editable = ordered_config();
+    editable.automations[0].cases[0].actions[0]
+        .report
+        .push(0xa1);
+    let compiled = CompiledConfig::compile(&editable).unwrap();
     let windows = [
         FocusedWindow {
             title: Some("LEAGUE".into()),
@@ -215,14 +200,61 @@ fn active_evaluation_preserves_editable_semantics_and_all_declared_orders() {
         FocusedWindow::default(),
     ];
 
-    for window in &windows {
-        assert_eq!(
-            active_snapshots(&active, window),
-            editable_snapshots(&editable, window)
-        );
+    let expected = [
+        vec![
+            (
+                "Layers",
+                "Game",
+                vec![0x87, 0xa1],
+                vec!["keypad", "keyboard"],
+            ),
+            ("Layers", "Game", vec![0x20], vec!["keyboard"]),
+            ("Status", "Otherwise", vec![0], vec!["keypad"]),
+        ],
+        vec![
+            ("Layers", "Later game", vec![0xff], vec!["keyboard"]),
+            ("Status", "Otherwise", vec![0], vec!["keypad"]),
+        ],
+        vec![
+            (
+                "Layers",
+                "Game",
+                vec![0x87, 0xa1],
+                vec!["keypad", "keyboard"],
+            ),
+            ("Layers", "Game", vec![0x20], vec!["keyboard"]),
+            ("Status", "Otherwise", vec![0], vec!["keypad"]),
+        ],
+        vec![
+            ("Layers", "Otherwise", vec![0x86], vec!["keyboard"]),
+            ("Status", "Editor", vec![1], vec!["keypad"]),
+        ],
+        vec![
+            ("Layers", "Otherwise", vec![0x86], vec!["keyboard"]),
+            ("Status", "Otherwise", vec![0], vec!["keypad"]),
+        ],
+    ];
+    for (window, expected) in windows.iter().zip(expected) {
+        let snapshots = compiled_snapshots(&compiled, window);
+        let actual = snapshots
+            .iter()
+            .map(|dispatch| {
+                (
+                    dispatch.automation.as_str(),
+                    dispatch.case.as_str(),
+                    dispatch.report.clone(),
+                    dispatch
+                        .destinations
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
-    let game = active_snapshots(&active, &windows[0]);
+    let game = compiled_snapshots(&compiled, &windows[0]);
     assert_eq!(
         game.iter()
             .map(|dispatch| dispatch.automation.as_str())
@@ -230,16 +262,14 @@ fn active_evaluation_preserves_editable_semantics_and_all_declared_orders() {
         ["Layers", "Layers", "Status"]
     );
     assert_eq!(game[0].case, "Game");
-    assert_eq!(game[0].label, "Set layer");
-    assert_eq!(game[1].label, "Set lighting");
     assert_eq!(game[0].destinations, ["keypad", "keyboard"]);
 }
 
 #[test]
 fn compiled_config_owns_dispatch_data_after_source_is_dropped() {
-    let active = {
-        let editable = parity_config();
-        ActiveConfig::compile(&editable).unwrap()
+    let compiled = {
+        let editable = ordered_config();
+        CompiledConfig::compile(&editable).unwrap()
     };
     let window = FocusedWindow {
         title: Some("LEAGUE".into()),
@@ -247,14 +277,13 @@ fn compiled_config_owns_dispatch_data_after_source_is_dropped() {
         ..FocusedWindow::default()
     };
 
-    let dispatches = active.evaluate_event(&Event::FocusedWindowChanged {
+    let dispatches = compiled.evaluate_event(&Event::FocusedWindowChanged {
         window,
         generation: 1,
     });
 
     assert_eq!(dispatches[0].automation_name(), "Layers");
     assert_eq!(dispatches[0].case_name(), "Game");
-    assert_eq!(dispatches[0].action_label(), "Set layer");
     assert_eq!(dispatches[0].report(), [0x87]);
     assert_eq!(dispatches[0].destinations()[0].name, "Keypad");
 }
@@ -289,14 +318,14 @@ fn disabled_automation_with_dispatchable_actions_produces_nothing() {
         }],
         ..EditableConfig::default()
     };
-    let active = ActiveConfig::compile(&editable).unwrap();
+    let compiled = CompiledConfig::compile(&editable).unwrap();
     let window = FocusedWindow {
         title: Some("Game".into()),
         ..FocusedWindow::default()
     };
 
     assert!(
-        active
+        compiled
             .evaluate_event(&Event::FocusedWindowChanged {
                 window,
                 generation: 1
@@ -329,10 +358,10 @@ fn incomplete_disabled_draft_compiles_and_produces_nothing() {
         ..EditableConfig::default()
     };
 
-    let active = ActiveConfig::compile(&editable).unwrap();
+    let compiled = CompiledConfig::compile(&editable).unwrap();
 
     assert!(
-        active
+        compiled
             .evaluate_event(&Event::FocusedWindowChanged {
                 window: FocusedWindow::default(),
                 generation: 1
@@ -368,8 +397,8 @@ fn alias_destinations_retain_distinct_framing_in_declared_order() {
         ..EditableConfig::default()
     };
 
-    let active = ActiveConfig::compile(&editable).unwrap();
-    let dispatches = active.evaluate_event(&Event::FocusedWindowChanged {
+    let compiled = CompiledConfig::compile(&editable).unwrap();
+    let dispatches = compiled.evaluate_event(&Event::FocusedWindowChanged {
         window: FocusedWindow::default(),
         generation: 1,
     });
@@ -389,57 +418,23 @@ fn alias_destinations_retain_distinct_framing_in_declared_order() {
 }
 
 #[test]
-fn case_insensitive_contains_preserves_lowercase_matching_semantics() {
-    for (actual, value) in [
-        ("Prefix LEAGUE suffix", "league"),
-        ("No match", "league"),
-        ("İSTANBUL", "İS"),
-        ("CAFÉ", "fé"),
-        ("anything", ""),
-    ] {
-        let condition = condition(MatchOperator::Contains, value, false);
-        let compiled = compile_condition(Some(&condition), "matcher.title")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            matches_condition(Some(&compiled), Some(actual)),
-            actual.to_lowercase().contains(&value.to_lowercase()),
-            "actual={actual:?}, value={value:?}"
-        );
-    }
-}
-
-#[test]
 fn public_compilation_rejects_validation_failures() {
-    let mut invalid_regex = parity_config();
+    let mut invalid_regex = ordered_config();
     invalid_regex.automations[0].cases[0].applications[0].class =
         Some(condition(MatchOperator::Regex, "[", false));
-    let regex_errors = ActiveConfig::compile(&invalid_regex).unwrap_err();
+    let regex_errors = CompiledConfig::compile(&invalid_regex).unwrap_err();
     assert!(
         regex_errors
             .iter()
             .any(|error| error.message == "invalid regular expression")
     );
 
-    let mut unresolved = parity_config();
+    let mut unresolved = ordered_config();
     unresolved.automations[0].cases[0].actions[0].device_ids = vec!["missing".into()];
-    let destination_errors = ActiveConfig::compile(&unresolved).unwrap_err();
+    let destination_errors = CompiledConfig::compile(&unresolved).unwrap_err();
     assert!(
         destination_errors
             .iter()
             .any(|error| error.message.contains("unknown device 'missing'"))
     );
-}
-
-#[test]
-fn compilation_steps_return_errors_instead_of_dropping_invalid_data() {
-    let invalid_regex = condition(MatchOperator::Regex, "[", false);
-    let regex_error = compile_condition(Some(&invalid_regex), "matcher.title").unwrap_err();
-    assert_eq!(regex_error.path, "matcher.title");
-
-    let unresolved = action("send", "Send", 0x42, &["missing"]);
-    let destination_error = compile_actions(&[unresolved], &HashMap::new(), "actions").unwrap_err();
-    assert_eq!(destination_error.path, "actions[0]");
-    assert!(destination_error.message.contains("device 'missing'"));
 }

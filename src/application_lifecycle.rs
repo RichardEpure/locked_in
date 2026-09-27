@@ -1,28 +1,18 @@
 use std::{future::Future, sync::Mutex, time::Duration};
 
-use crate::{
-    app_log, automation_runtime::RuntimeOwner, config_runtime_bridge::ConfigRuntimeBridge,
-};
+use crate::{app_log, automation_runtime::RuntimeOwner};
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Owns backend lifetimes until desktop exit has finished waiting for them.
 pub(crate) struct ApplicationLifecycle {
-    workers: Mutex<Option<Workers>>,
-}
-
-struct Workers {
-    runtime: RuntimeOwner,
-    config_bridge: Option<ConfigRuntimeBridge>,
+    runtime: Mutex<Option<RuntimeOwner>>,
 }
 
 impl ApplicationLifecycle {
-    pub(crate) fn new(owner: RuntimeOwner, config_bridge: Option<ConfigRuntimeBridge>) -> Self {
+    pub(crate) fn new(owner: RuntimeOwner) -> Self {
         Self {
-            workers: Mutex::new(Some(Workers {
-                runtime: owner,
-                config_bridge,
-            })),
+            runtime: Mutex::new(Some(owner)),
         }
     }
 
@@ -36,25 +26,22 @@ impl ApplicationLifecycle {
         &self,
         timeout: Duration,
     ) -> Option<impl Future<Output = ()> + 'static> {
-        let workers = self
-            .workers
+        let runtime = self
+            .runtime
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()?;
-        workers.runtime.request_shutdown();
+        runtime.request_shutdown();
         app_log::write("application shutdown requested");
         let deadline = tokio::time::Instant::now() + timeout;
         Some(async move {
             // The UI executor stays responsive while synchronous joins wait.
             let joins = tokio::task::spawn_blocking(move || {
-                if let Some(bridge) = workers.config_bridge {
-                    bridge.shutdown_and_join();
-                }
-                workers.runtime.shutdown_and_join(
+                runtime.shutdown_and_join(
                     deadline.saturating_duration_since(tokio::time::Instant::now()),
                 );
             });
-            // The deadline includes both joins and blocking-pool scheduling.
+            // The deadline includes the join and blocking-pool scheduling.
             // Timing out detaches the join task; it does not cancel driver I/O.
             match tokio::time::timeout_at(deadline, joins).await {
                 Ok(Ok(())) => {}

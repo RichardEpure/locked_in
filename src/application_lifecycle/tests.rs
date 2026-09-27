@@ -39,7 +39,7 @@ fn blocked_application() -> (ApplicationLifecycle, AutomationRuntime, mpsc::Send
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let (_, observations) = tokio::sync::watch::channel(ForegroundObservation::default());
-    let (runtime, owner) = AutomationRuntime::start_active(
+    let (runtime, owner) = AutomationRuntime::start(
         None,
         RuntimeInputs {
             focused_window: FocusInput::new(observations, EventSourceState::Available),
@@ -51,7 +51,7 @@ fn blocked_application() -> (ApplicationLifecycle, AutomationRuntime, mpsc::Send
     )
     .unwrap();
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    (ApplicationLifecycle::new(owner, None), runtime, release)
+    (ApplicationLifecycle::new(owner), runtime, release)
 }
 
 #[test]
@@ -125,32 +125,32 @@ fn exit_finishes_waiting_after_timeout_without_claiming_a_blocked_worker_stopped
 }
 
 #[test]
-fn overall_deadline_includes_a_blocked_configuration_bridge() {
-    let (mut lifecycle, runtime, release_hid) = blocked_application();
-    let (bridge, release_bridge) = ConfigRuntimeBridge::blocked_for_test();
-    lifecycle
-        .workers
-        .get_mut()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .config_bridge = Some(bridge);
+fn overall_deadline_includes_blocking_pool_scheduling() {
+    let (lifecycle, runtime, release_hid) = blocked_application();
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_time()
+        .max_blocking_threads(1)
         .build()
         .unwrap();
     executor.block_on(async {
+        let (entered, entered_rx) = mpsc::channel();
+        let (release_pool, release_pool_rx) = mpsc::channel();
+        let occupied = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            release_pool_rx.recv().unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let completion = lifecycle
             .begin_shutdown_with_timeout(Duration::from_millis(20))
             .unwrap();
         let result = tokio::time::timeout(Duration::from_secs(1), completion).await;
-        // Release both gates even if the deadline assertion fails, so executor
-        // teardown cannot hang on its blocking pool.
-        release_bridge.send(()).unwrap();
+        // Release both gates even on assertion failure so teardown cannot hang.
+        release_pool.send(()).unwrap();
         release_hid.send(()).unwrap();
+        occupied.await.unwrap();
         assert!(
             result.is_ok(),
-            "configuration join exceeded the application deadline"
+            "blocking-pool scheduling exceeded the application deadline"
         );
         assert!(lifecycle.begin_shutdown().is_none());
         assert_eq!(

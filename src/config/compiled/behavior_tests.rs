@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use super::*;
+use super::super::*;
 use crate::{
-    config::{Automation, AutomationCase},
+    config::{Automation, AutomationCase, SendAction, TextCondition, WindowMatcher},
     focused_window::FocusedWindow,
 };
 
@@ -64,6 +64,7 @@ fn first_matching_case_wins_and_otherwise_is_fallback() {
         ..AutomationCase::default()
     });
 
+    let config = CompiledConfig::compile(&config).unwrap();
     let matching = FocusedWindow {
         title: Some("My Game".into()),
         ..FocusedWindow::default()
@@ -78,8 +79,7 @@ fn first_matching_case_wins_and_otherwise_is_fallback() {
             window: matching,
             generation: 1
         })[0]
-            .action
-            .report,
+            .report(),
         [0x87]
     );
     assert_eq!(
@@ -87,8 +87,7 @@ fn first_matching_case_wins_and_otherwise_is_fallback() {
             window: other,
             generation: 1
         })[0]
-            .action
-            .report,
+            .report(),
         [0x86]
     );
 }
@@ -105,6 +104,7 @@ fn neutral_focus_fields_are_anded_and_matchers_are_ored() {
         },
         matcher("fallback", "Fallback"),
     ];
+    let config = CompiledConfig::compile(&config).unwrap();
     let wrong_executable = FocusedWindow {
         title: Some("League".into()),
         class: Some("GameWindow".into()),
@@ -121,8 +121,7 @@ fn neutral_focus_fields_are_anded_and_matchers_are_ored() {
             window: wrong_executable,
             generation: 1
         })[0]
-            .action
-            .report,
+            .report(),
         [0x86]
     );
     assert_eq!(
@@ -130,18 +129,18 @@ fn neutral_focus_fields_are_anded_and_matchers_are_ored() {
             window: game,
             generation: 1
         })[0]
-            .action
-            .report,
+            .report(),
         [0x87]
     );
 }
 
 #[test]
-fn matching_exception_skips_to_next_case() {
+fn matching_exception_uses_otherwise_when_no_later_case_matches() {
     let mut config = config();
     config.automations[0].cases[0]
         .exceptions
         .push(matcher("browser", "Browser"));
+    let config = CompiledConfig::compile(&config).unwrap();
     let window = FocusedWindow {
         title: Some("Browser Game".into()),
         ..FocusedWindow::default()
@@ -152,8 +151,7 @@ fn matching_exception_skips_to_next_case() {
             window,
             generation: 1
         })[0]
-            .action
-            .report,
+            .report(),
         [0x86]
     );
 }
@@ -165,6 +163,7 @@ fn all_automations_evaluate_independently() {
     second.id = "lighting".into();
     second.name = "Lighting".into();
     config.automations.push(second);
+    let config = CompiledConfig::compile(&config).unwrap();
     let window = FocusedWindow {
         title: Some("Game".into()),
         ..FocusedWindow::default()

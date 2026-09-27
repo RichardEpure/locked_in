@@ -96,7 +96,7 @@ pub(super) fn save_automation(
     draft: &Automation,
     is_new: bool,
 ) -> Result<Arc<PublishedConfig>, AutomationCommitError> {
-    let mut candidate = editable_at_revision(coordinator, expected_revision)?;
+    let mut candidate = coordinator.editable_at_revision(expected_revision)?;
     if is_new {
         if candidate
             .automations
@@ -119,7 +119,7 @@ pub(super) fn save_automation(
         candidate.automations[index] = draft.clone();
     }
     coordinator
-        .update(expected_revision, move |_| candidate)
+        .update(expected_revision, candidate)
         .map_err(Into::into)
 }
 
@@ -128,7 +128,7 @@ pub(super) fn delete_automation(
     expected_revision: u64,
     automation_id: &str,
 ) -> Result<Arc<PublishedConfig>, AutomationCommitError> {
-    let mut candidate = editable_at_revision(coordinator, expected_revision)?;
+    let mut candidate = coordinator.editable_at_revision(expected_revision)?;
     let original_len = candidate.automations.len();
     candidate
         .automations
@@ -139,7 +139,7 @@ pub(super) fn delete_automation(
         ));
     }
     coordinator
-        .update(expected_revision, move |_| candidate)
+        .update(expected_revision, candidate)
         .map_err(Into::into)
 }
 
@@ -151,7 +151,7 @@ pub(in crate::components::workspace) fn commit_captured_matcher(
     exception: bool,
     captured: &FocusedWindow,
 ) -> Result<Arc<PublishedConfig>, AutomationCommitError> {
-    let mut candidate = editable_at_revision(coordinator, expected_revision)?;
+    let mut candidate = coordinator.editable_at_revision(expected_revision)?;
     let Some(automation) = candidate
         .automations
         .iter_mut()
@@ -165,23 +165,8 @@ pub(in crate::components::workspace) fn commit_captured_matcher(
         return Err(AutomationCommitError::CaseMissing(case_id.to_string()));
     }
     coordinator
-        .update(expected_revision, move |_| candidate)
+        .update(expected_revision, candidate)
         .map_err(Into::into)
-}
-
-fn editable_at_revision(
-    coordinator: &ConfigCoordinator,
-    expected_revision: u64,
-) -> Result<crate::config::EditableConfig, AutomationCommitError> {
-    let publication = coordinator.current();
-    if publication.revision() != expected_revision {
-        return Err(ConfigCoordinatorError::StaleRevision {
-            expected: expected_revision,
-            actual: publication.revision(),
-        }
-        .into());
-    }
-    Ok(publication.editable().as_ref().clone())
 }
 
 #[cfg(test)]

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use dioxus::prelude::*;
 use dioxus_icons::lucide::Trash2;
 
@@ -20,7 +18,6 @@ pub(super) struct ActionEditorProps {
     case_index: Option<usize>,
     action_index: usize,
     action: SendAction,
-    publication: Signal<Arc<PublishedConfig>>,
 }
 
 #[component]
@@ -29,8 +26,8 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     let inventory = consume_context::<HidInventoryContext>().current();
     let mut draft = props.draft;
     let action = props.action;
-    let publication = props.publication;
-    let devices = action_destinations(&publication.read());
+    let publication = consume_context::<crate::components::PublishedConfigContext>();
+    let devices = action_destinations(&publication.required());
     let devices_with_presence = devices
         .iter()
         .cloned()
@@ -69,7 +66,7 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                             return;
                         };
                         action.report = report;
-                        let published = publication.read().clone();
+                        let published = publication.required();
                         let config = published.editable();
                         let validation_errors = config.validate_action(&action);
                         if !validation_errors.is_empty() {

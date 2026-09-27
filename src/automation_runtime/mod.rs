@@ -5,7 +5,7 @@ mod worker;
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{ActiveConfig, Device, SendAction},
+    config::{CompiledConfig, Device, PublishedConfig, SendAction},
     event::Event,
     hid::{HidBackend, HidInventory},
 };
@@ -41,7 +41,7 @@ enum BoundaryClaim {
     Shutdown,
     Event {
         event: Event,
-        config: Option<Arc<ActiveConfig>>,
+        config: Option<Arc<CompiledConfig>>,
     },
     Command,
     Wait,
@@ -49,7 +49,6 @@ enum BoundaryClaim {
 
 /// Cross-thread state only.
 struct Shared {
-    config: RwLock<Option<Arc<ActiveConfig>>>,
     health: RuntimeHealth,
     hid_inventory: watch::Sender<Arc<HidInventory>>,
     commands: mpsc::Sender<RuntimeCommand>,
@@ -75,8 +74,14 @@ impl Shared {
         false
     }
 
-    fn claim_boundary(&self, inputs: &mut RuntimeInputs, command_staged: bool) -> BoundaryClaim {
-        // Hold admission and config through input claiming so shutdown, config replacement,
+    fn claim_boundary(
+        &self,
+        inputs: &mut RuntimeInputs,
+        publications: Option<&watch::Receiver<Arc<PublishedConfig>>>,
+        command_staged: bool,
+    ) -> BoundaryClaim {
+        // Lock order: runtime admission -> coordinator publication -> input claim.
+        // Hold the publication read guard through input claiming so shutdown, publication,
         // and starting an event have a consistent ordering. Input guards stay held through
         // the observation mark; later observations belong to a later batch. The claimed
         // batch retains its selected config after these locks are released.
@@ -84,10 +89,7 @@ impl Shared {
             .admission
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let config = self
-            .config
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let publication = publications.map(watch::Receiver::borrow);
         if admission.shutdown_requested {
             // Shutdown won admission; cancel pending input instead of starting it.
             inputs.cancel_pending();
@@ -95,7 +97,7 @@ impl Shared {
         } else if let Some(event) = inputs.claim_next() {
             BoundaryClaim::Event {
                 event,
-                config: config.clone(),
+                config: publication.as_ref().map(|value| value.compiled().clone()),
             }
         } else if command_staged {
             BoundaryClaim::Command
@@ -157,13 +159,13 @@ pub(crate) struct AutomationRuntime {
 }
 
 impl AutomationRuntime {
-    pub fn start_active(
-        initial_config: Option<Arc<ActiveConfig>>,
+    pub fn start(
+        publications: Option<watch::Receiver<Arc<PublishedConfig>>>,
         inputs: RuntimeInputs,
         backend: impl HidBackend,
     ) -> Result<(Self, RuntimeOwner)> {
-        Self::start_active_inner(
-            initial_config,
+        Self::start_inner(
+            publications,
             inputs,
             backend,
             #[cfg(test)]
@@ -171,8 +173,8 @@ impl AutomationRuntime {
         )
     }
 
-    fn start_active_inner(
-        initial_config: Option<Arc<ActiveConfig>>,
+    fn start_inner(
+        publications: Option<watch::Receiver<Arc<PublishedConfig>>>,
         inputs: RuntimeInputs,
         backend: impl HidBackend,
         #[cfg(test)] initialization_claim_gate: Option<ClaimGate>,
@@ -181,9 +183,8 @@ impl AutomationRuntime {
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (hid_inventory, _) = watch::channel(Arc::new(HidInventory::default()));
         let (completed, completion_rx) = std::sync::mpsc::channel();
-        let health = RuntimeHealth::new(inputs.source_states(), initial_config.is_some());
+        let health = RuntimeHealth::new(inputs.source_states(), publications.is_some());
         let shared = Arc::new(Shared {
-            config: RwLock::new(initial_config),
             health,
             hid_inventory,
             commands,
@@ -201,6 +202,7 @@ impl AutomationRuntime {
         let worker = AutomationWorker::new(
             runtime.shared.clone(),
             inputs,
+            publications,
             command_rx,
             shutdown_rx,
             Box::new(backend),
@@ -217,15 +219,6 @@ impl AutomationRuntime {
             worker: Some(worker),
         };
         Ok((runtime, owner))
-    }
-
-    pub(crate) fn replace_active_config(&self, config: Arc<ActiveConfig>) {
-        *self
-            .shared
-            .config
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
-        self.shared.health.config_installed();
     }
 
     pub fn subscribe_status(&self) -> watch::Receiver<RuntimeStatus> {

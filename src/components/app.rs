@@ -14,12 +14,8 @@ use dioxus::{
 };
 
 use crate::{
-    FOCUSED_WINDOW_SIGNAL, app_log,
-    application_lifecycle::ApplicationLifecycle,
-    arm_capture,
-    config::{LogLevel, PublishedConfig},
-    focused_window::FocusedWindow,
-    win,
+    FOCUSED_WINDOW_SIGNAL, app_log, application_lifecycle::ApplicationLifecycle, arm_capture,
+    config::PublishedConfig, focused_window::FocusedWindow, win,
 };
 
 use super::{PublishedConfigContext, capture_shortcut::CaptureShortcut, workspace::Workspace};
@@ -38,8 +34,6 @@ pub(crate) fn App() -> Element {
     let close_behavior = use_signal(|| WindowCloseBehaviour::WindowCloses);
     let publication_subscription =
         consume_context::<Option<tokio::sync::watch::Receiver<Arc<PublishedConfig>>>>();
-    let publication = use_signal(|| None::<Arc<PublishedConfig>>);
-    use_context_provider(move || PublishedConfigContext::new(publication));
     let menu = Menu::new();
     let open_item = MenuItem::with_id("open", "Open Locked In", true, None);
     let capture_item = MenuItem::with_id("capture", "Capture focused window (F3)", true, None);
@@ -71,6 +65,14 @@ pub(crate) fn App() -> Element {
         app_log::write("tray icon could not be created");
         window.set_visible(true);
     }
+    let publication = use_signal(|| {
+        publication_subscription
+            .as_ref()
+            .map(|receiver| receiver.borrow().clone())
+    });
+    let projection = use_context_provider(move || {
+        PublishedConfigContext::new(publication, close_behavior, tray_available)
+    });
     use_future({
         move || {
             let mut subscription = publication_subscription.clone();
@@ -78,13 +80,9 @@ pub(crate) fn App() -> Element {
                 let Some(subscription) = subscription.as_mut() else {
                     return;
                 };
-                project_current_publication(subscription, tray_available, |projection| {
-                    apply_publication(projection, close_behavior, publication);
-                });
+                projection.acknowledge(subscription.borrow_and_update().clone());
                 while subscription.changed().await.is_ok() {
-                    project_current_publication(subscription, tray_available, |projection| {
-                        apply_publication(projection, close_behavior, publication);
-                    });
+                    projection.acknowledge(subscription.borrow_and_update().clone());
                 }
             }
         }
@@ -162,39 +160,6 @@ pub(crate) fn App() -> Element {
     }
 }
 
-struct PublicationProjection {
-    publication: Arc<PublishedConfig>,
-    log_level: LogLevel,
-    close_behavior: WindowCloseBehaviour,
-}
-
-fn project_current_publication(
-    receiver: &mut tokio::sync::watch::Receiver<Arc<PublishedConfig>>,
-    tray_available: bool,
-    publish: impl FnOnce(PublicationProjection),
-) {
-    let publication = receiver.borrow_and_update().clone();
-    let projection = PublicationProjection {
-        log_level: publication.editable().settings.log_level,
-        close_behavior: effective_close_behavior(
-            publication.editable().settings.close_to_tray,
-            tray_available,
-        ),
-        publication,
-    };
-    publish(projection);
-}
-
-fn apply_publication(
-    projection: PublicationProjection,
-    mut close_behavior: Signal<WindowCloseBehaviour>,
-    mut publication: Signal<Option<Arc<PublishedConfig>>>,
-) {
-    app_log::set_level(projection.log_level);
-    close_behavior.set(projection.close_behavior);
-    publication.set(Some(projection.publication));
-}
-
 fn request_application_exit(
     lifecycle: &ApplicationLifecycle,
     window: &dioxus::desktop::DesktopContext,
@@ -213,7 +178,10 @@ fn request_application_exit(
     });
 }
 
-fn effective_close_behavior(close_to_tray: bool, tray_available: bool) -> WindowCloseBehaviour {
+pub(super) fn effective_close_behavior(
+    close_to_tray: bool,
+    tray_available: bool,
+) -> WindowCloseBehaviour {
     if close_to_tray && tray_available {
         WindowCloseBehaviour::WindowHides
     } else {

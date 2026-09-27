@@ -1,14 +1,12 @@
-mod active;
+mod compiled;
 mod coordinator;
 mod encoding;
-#[cfg(test)]
-mod evaluation;
 mod model;
 mod paths;
 mod store;
 mod validation;
 
-pub use active::ActiveConfig;
+pub use compiled::CompiledConfig;
 #[cfg(test)]
 pub use coordinator::StartWithWindowsState;
 pub use coordinator::{
@@ -22,6 +20,3 @@ pub use model::{
 pub use paths::{ApplicationPaths, resolve_application_paths};
 pub use store::ConfigStore;
 pub use validation::ValidationError;
-
-#[cfg(test)]
-pub type Config = EditableConfig;

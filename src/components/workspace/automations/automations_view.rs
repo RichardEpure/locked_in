@@ -8,9 +8,7 @@ use crate::{
 use crate::components::workspace::empty_state::EmptyState;
 use crate::components::workspace::selection::SelectionProps;
 
-use super::{
-    automation_editor::AutomationEditor, publication::new_automation, use_config_publication,
-};
+use super::{automation_editor::AutomationEditor, publication::new_automation};
 
 #[component]
 pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -> Element {
@@ -18,8 +16,8 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
     let mut query = use_signal(String::new);
     let pending_delete = use_signal(|| None::<String>);
     let mut pending_draft = use_signal(|| None::<Automation>);
-    let (_coordinator, publication) = use_config_publication();
-    let published = publication.read().clone();
+    let publication = consume_context::<crate::components::PublishedConfigContext>();
+    let published = publication.required();
     let mut automations = published.editable().automations.clone();
     if let Some(pending) = pending_draft.read().clone()
         && !automations
@@ -43,7 +41,7 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
                     title: "New automation (Ctrl+N)",
                     disabled: navigation_locked,
                     onclick: move |_| {
-                        let automation = new_automation(&publication.read());
+                        let automation = new_automation(&publication.required());
                         let id = automation.id.clone();
                         pending_draft.set(Some(automation));
                         let token = format!("automation:{id}");
@@ -84,7 +82,7 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
         section {
             class: "workspace",
             if let Some(id) = selected().filter(|id| automations.iter().any(|automation| automation.id == *id)) {
-                AutomationEditor { key: "{id}", id, selected, pending_delete, pending_draft, publication }
+                AutomationEditor { key: "{id}", id, selected, pending_delete, pending_draft }
             } else {
                 EmptyState { title: "Select an automation", copy: "Create or select an automation to configure its event, ordered cases, and report routes." }
             }

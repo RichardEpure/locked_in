@@ -10,10 +10,8 @@ use super::{
     draft::{DeviceDraft, device_references},
     numeric_field::{NumericField, NumericFormat},
 };
-use crate::components::workspace::{
-    hid_inventory::{HidInventoryContext, hid_presence_view},
-    published_config::PublishedConfigContext,
-};
+use crate::components::PublishedConfigContext;
+use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct DeviceEditorProps {
@@ -27,7 +25,7 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
     let coordinator = consume_context::<Option<Arc<ConfigCoordinator>>>()
         .expect("configuration coordinator must be available after a successful load");
     let publication_context = consume_context::<PublishedConfigContext>();
-    let published = publication_context.current();
+    let published = publication_context.required();
     let inventory = consume_context::<HidInventoryContext>().current();
     let mut selected = props.selected;
     let mut pending_draft = props.pending_draft;
@@ -49,7 +47,7 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
     };
 
     use_effect(move || {
-        let publication = publication_context.current();
+        let publication = publication_context.required();
         let mut synchronized = editor();
         if synchronized.refresh_if_clean(&publication) {
             editor.set(synchronized);
@@ -90,7 +88,8 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
                 } else if delete_confirm() {
                     let state = editor();
                     match state.delete(&coordinator_for_delete, &delete_references) {
-                        Ok(_) => {
+                        Ok(saved) => {
+                            if let Some(saved) = saved { publication_context.acknowledge(saved); }
                             pending_draft.set(None);
                             *DIRTY_EDITOR_SIGNAL.write() = None;
                             *UNSAVED_ENTITY_SIGNAL.write() = None;
@@ -140,13 +139,11 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
             }, "Cancel" }
                 button { class: "button primary", disabled: !dirty, onclick: move |_| {
                     let mut state = editor();
-                    let was_new = state.is_new();
                     match state.save(&coordinator_for_save) {
-                        Ok(_) => {
-                            editor.set(state.clone());
-                            if was_new {
-                                pending_draft.set(Some(state));
-                            }
+                        Ok(saved) => {
+                            publication_context.acknowledge(saved);
+                            editor.set(state);
+                            pending_draft.set(None);
                             *UNSAVED_ENTITY_SIGNAL.write() = None;
                             *DIRTY_EDITOR_SIGNAL.write() = None;
                             message.set(Some((true, "Device saved".into())));

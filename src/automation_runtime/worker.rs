@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     app_log,
-    config::{ActiveConfig, Device, SendAction},
+    config::{CompiledConfig, Device, PublishedConfig, SendAction},
     event::Event,
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
 };
@@ -20,6 +20,7 @@ use crate::{
 pub(super) struct AutomationWorker {
     shared: Arc<Shared>,
     inputs: RuntimeInputs,
+    publications: Option<watch::Receiver<Arc<PublishedConfig>>>,
     commands: mpsc::Receiver<RuntimeCommand>,
     shutdown: watch::Receiver<bool>,
     backend: Box<dyn HidBackend>,
@@ -29,6 +30,7 @@ impl AutomationWorker {
     pub(super) fn new(
         shared: Arc<Shared>,
         inputs: RuntimeInputs,
+        publications: Option<watch::Receiver<Arc<PublishedConfig>>>,
         commands: mpsc::Receiver<RuntimeCommand>,
         shutdown: watch::Receiver<bool>,
         backend: Box<dyn HidBackend>,
@@ -36,6 +38,7 @@ impl AutomationWorker {
         Self {
             shared,
             inputs,
+            publications,
             commands,
             shutdown,
             backend,
@@ -79,10 +82,11 @@ impl AutomationWorker {
             if self.inputs.has_pending() {
                 self.shared.wait_before_event_boundary_claim();
             }
-            match self
-                .shared
-                .claim_boundary(&mut self.inputs, staged_command.is_some())
-            {
+            match self.shared.claim_boundary(
+                &mut self.inputs,
+                self.publications.as_ref(),
+                staged_command.is_some(),
+            ) {
                 BoundaryClaim::Shutdown => {
                     self.cancel_pending_commands(staged_command.take());
                     break;
@@ -205,7 +209,7 @@ impl AutomationWorker {
         result
     }
 
-    fn dispatch_event(&mut self, event: &Event, config: Option<&ActiveConfig>) {
+    fn dispatch_event(&mut self, event: &Event, config: Option<&CompiledConfig>) {
         let Some(config) = config else {
             return;
         };

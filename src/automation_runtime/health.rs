@@ -59,10 +59,6 @@ impl RuntimeHealth {
         self.status.subscribe()
     }
 
-    pub(super) fn config_installed(&self) {
-        self.update(|state| state.has_config = true);
-    }
-
     pub(super) fn startup_finished(&self) {
         self.update(|state| {
             if state.lifecycle == RuntimeLifecycle::Starting {

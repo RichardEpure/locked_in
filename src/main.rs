@@ -3,7 +3,6 @@ mod application_lifecycle;
 mod automation_runtime;
 mod components;
 mod config;
-mod config_runtime_bridge;
 mod event;
 mod focused_window;
 mod hid;
@@ -317,9 +316,8 @@ fn main() {
             )
         }
     };
-    let active = publication.as_ref().map(|value| value.active().clone());
-    let (runtime, runtime_owner) = match automation_runtime::AutomationRuntime::start_active(
-        active,
+    let (runtime, runtime_owner) = match automation_runtime::AutomationRuntime::start(
+        publication_subscription.clone(),
         automation_runtime::RuntimeInputs {
             focused_window: automation_runtime::FocusInput::new(focus_events, focus_source),
         },
@@ -330,21 +328,6 @@ fn main() {
             app_log::write_error(format!("automation runtime failed to start: {error:#}"));
             return;
         }
-    };
-    let runtime_bridge = match publication_subscription.clone() {
-        Some(subscription) => {
-            match config_runtime_bridge::ConfigRuntimeBridge::start(runtime.clone(), subscription) {
-                Ok(bridge) => Some(bridge),
-                Err(error) => {
-                    app_log::write_error(format!(
-                        "configuration runtime bridge failed to start: {error:#}"
-                    ));
-                    runtime_owner.shutdown_and_join(std::time::Duration::from_secs(2));
-                    return;
-                }
-            }
-        }
-        None => None,
     };
     let mut desktop_config = DesktopConfig::new()
         .with_window(
@@ -374,7 +357,6 @@ fn main() {
     });
     let lifecycle = Arc::new(application_lifecycle::ApplicationLifecycle::new(
         runtime_owner,
-        runtime_bridge,
     ));
 
     dioxus::LaunchBuilder::desktop()

@@ -9,7 +9,16 @@ use std::{
 };
 
 use super::*;
-use crate::config::{ApplicationPaths, Device};
+use crate::config::{
+    ApplicationPaths, ConfigCoordinator, Device, StartWithWindows, StartWithWindowsOutcome,
+};
+
+struct ConfirmedStartup;
+impl StartWithWindows for ConfirmedStartup {
+    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
+        StartWithWindowsOutcome::confirmed(desired)
+    }
+}
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -139,9 +148,15 @@ fn unsupported_file_is_rejected_without_rewrite() {
 
 #[test]
 fn invalid_file_is_rejected_without_rewrite() {
+    let root = TestRoot::new("semantic-load");
+    let path = root.config_path();
     let mut invalid = EditableConfig::default();
     invalid.devices.push(Device::default());
-    assert_rejected_without_rewrite(&encoding::encode(&invalid).unwrap());
+    let bytes = encoding::encode(&invalid).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let store = Arc::new(ConfigStore::new(&path));
+    assert!(ConfigCoordinator::initial_load(store, Arc::new(ConfirmedStartup)).is_err());
+    assert_eq!(fs::read_to_string(path).unwrap(), bytes);
 }
 
 #[test]
@@ -234,9 +249,68 @@ fn failed_validation_leaves_destination_bytes_unchanged() {
     fs::write(&path, &original).unwrap();
     let mut invalid = EditableConfig::default();
     invalid.devices.push(Device::default());
+    let coordinator = ConfigCoordinator::initial_load(
+        Arc::new(ConfigStore::new(&path)),
+        Arc::new(ConfirmedStartup),
+    )
+    .unwrap();
+    let before = coordinator.current();
+    assert!(
+        coordinator
+            .update(before.revision(), invalid.clone())
+            .is_err()
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    let invalid_bytes = encoding::encode(&invalid).unwrap();
+    fs::write(&path, &invalid_bytes).unwrap();
+    assert!(coordinator.reload().is_err());
+    assert!(Arc::ptr_eq(&before, &coordinator.current()));
+    assert_eq!(fs::read_to_string(path).unwrap(), invalid_bytes);
+    assert!(root.temporary_files().is_empty());
+}
 
-    assert!(ConfigStore::new(&path).save(&invalid).is_err());
-    assert_eq!(fs::read_to_string(path).unwrap(), original);
+#[test]
+fn same_store_saves_prepare_independently_and_install_whole_files() {
+    let root = TestRoot::new("same-instance");
+    let path = root.config_path();
+    let ready = Arc::new(Barrier::new(3));
+    let releases = [Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2))];
+    let (installed, installed_rx) = std::sync::mpsc::channel();
+    let store = Arc::new(ConfigStore::with_hooks(
+        &path,
+        TestHooks {
+            before_install: Some(Arc::new({
+                let ready = ready.clone();
+                let releases = releases.clone();
+                let index = AtomicU64::new(0);
+                move || {
+                    let index = index.fetch_add(1, Ordering::SeqCst) as usize;
+                    ready.wait();
+                    releases[index].wait();
+                }
+            })),
+            ..TestHooks::default()
+        },
+    ));
+    let handles = [changed_config(), other_config()].map(|candidate| {
+        let store = store.clone();
+        let installed = installed.clone();
+        thread::spawn(move || {
+            store.save(&candidate).unwrap();
+            installed.send(candidate).unwrap();
+        })
+    });
+    ready.wait();
+    assert_eq!(root.temporary_files().len(), 2);
+    releases[0].wait();
+    let first = installed_rx.recv().unwrap();
+    assert_eq!(store.load().unwrap(), first);
+    releases[1].wait();
+    let second = installed_rx.recv().unwrap();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(store.load().unwrap(), second);
     assert!(root.temporary_files().is_empty());
 }
 
