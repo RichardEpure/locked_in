@@ -28,12 +28,12 @@ impl RuntimeInputs {
         .into()
     }
 
-    /// Called only while admission and the configuration read guard are held.
+    /// Claims the next pending event according to its source's delivery policy.
     pub(super) fn claim_next(&mut self) -> Option<Event> {
         self.focused_window.claim_next()
     }
 
-    /// Called under admission after shutdown has won the claim.
+    /// Marks pending input as cancelled.
     pub(super) fn cancel_pending(&self) {
         self.focused_window.cancel_pending();
     }

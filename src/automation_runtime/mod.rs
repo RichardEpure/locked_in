@@ -1,8 +1,8 @@
+mod health;
 mod inputs;
 mod worker;
 
 use std::{
-    collections::BTreeMap,
     error::Error,
     fmt::{self, Display, Formatter},
     sync::{Arc, Mutex, RwLock},
@@ -13,135 +13,23 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{ActiveConfig, Device, EventKind, SendAction},
+    config::{ActiveConfig, Device, SendAction},
     event::Event,
     hid::{HidBackend, HidInventory},
 };
 
+use health::RuntimeHealth;
+pub(crate) use health::{RuntimePhase, RuntimeStatus};
 pub(crate) use inputs::{EventSourceState, FocusInput, RuntimeInputs};
+use worker::AutomationWorker;
 
 #[cfg(test)]
 use tests::ClaimGate;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimePhase {
-    Starting,
-    Active,
-    Degraded,
-    Unavailable,
-    Stopping,
-    Stopped,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeStatus {
-    pub phase: RuntimePhase,
-    pub detail: Option<String>,
-}
-
-impl RuntimeStatus {
-    fn starting() -> Self {
-        Self {
-            phase: RuntimePhase::Starting,
-            detail: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestDispatchResult {
     pub sent: usize,
     pub failures: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeLifecycle {
-    Starting,
-    Running,
-    Stopping,
-    Stopped,
-}
-
-struct RuntimeHealth {
-    sources: BTreeMap<EventKind, EventSourceState>,
-    refresh_error: Option<String>,
-    dispatch_error: Option<String>,
-    worker_error: Option<String>,
-    has_config: bool,
-    lifecycle: RuntimeLifecycle,
-}
-
-impl RuntimeHealth {
-    fn status(&self) -> RuntimeStatus {
-        match self.lifecycle {
-            RuntimeLifecycle::Starting => return RuntimeStatus::starting(),
-            RuntimeLifecycle::Stopping => {
-                return RuntimeStatus {
-                    phase: RuntimePhase::Stopping,
-                    detail: None,
-                };
-            }
-            RuntimeLifecycle::Stopped => {
-                return RuntimeStatus {
-                    phase: RuntimePhase::Stopped,
-                    detail: None,
-                };
-            }
-            RuntimeLifecycle::Running => {}
-        }
-
-        let mut unavailable = Vec::new();
-        if let Some(error) = &self.worker_error {
-            unavailable.push(error.clone());
-        }
-        let source_errors = self
-            .sources
-            .iter()
-            .filter_map(|(source, state)| match state {
-                EventSourceState::Available => None,
-                EventSourceState::Unavailable(error) => Some(format!("{source}: {error}")),
-            })
-            .collect::<Vec<_>>();
-        if !self
-            .sources
-            .values()
-            .any(|state| *state == EventSourceState::Available)
-        {
-            if source_errors.is_empty() {
-                unavailable.push("event sources are unavailable".to_string());
-            } else {
-                unavailable.extend(source_errors.iter().cloned());
-            }
-        }
-        if !self.has_config {
-            unavailable.push("configuration is unavailable".to_string());
-        }
-        if !unavailable.is_empty() {
-            return RuntimeStatus {
-                phase: RuntimePhase::Unavailable,
-                detail: Some(unavailable.join("; ")),
-            };
-        }
-        let degraded = source_errors
-            .into_iter()
-            .chain(
-                self.refresh_error
-                    .iter()
-                    .chain(&self.dispatch_error)
-                    .cloned(),
-            )
-            .collect::<Vec<_>>();
-        if !degraded.is_empty() {
-            return RuntimeStatus {
-                phase: RuntimePhase::Degraded,
-                detail: Some(degraded.join("; ")),
-            };
-        }
-        RuntimeStatus {
-            phase: RuntimePhase::Active,
-            detail: None,
-        }
-    }
 }
 
 struct Admission {
@@ -159,12 +47,10 @@ enum BoundaryClaim {
     Wait,
 }
 
+/// Cross-thread state only.
 struct Shared {
     config: RwLock<Option<Arc<ActiveConfig>>>,
-    health: Mutex<RuntimeHealth>,
-    status: watch::Sender<RuntimeStatus>,
-    #[cfg(test)]
-    status_history: Mutex<Vec<RuntimeStatus>>,
+    health: RuntimeHealth,
     hid_inventory: watch::Sender<Arc<HidInventory>>,
     commands: mpsc::Sender<RuntimeCommand>,
     shutdown: watch::Sender<bool>,
@@ -173,6 +59,59 @@ struct Shared {
     initialization_claim_gate: Mutex<Option<ClaimGate>>,
     #[cfg(test)]
     boundary_claim_gate: Mutex<Option<ClaimGate>>,
+}
+
+impl Shared {
+    fn claim_initialization(&self, inputs: &RuntimeInputs) -> bool {
+        let admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !admission.shutdown_requested {
+            return true;
+        }
+        // Shutdown won admission before initialization; cancel pending input under the same lock.
+        inputs.cancel_pending();
+        false
+    }
+
+    fn claim_boundary(&self, inputs: &mut RuntimeInputs, command_staged: bool) -> BoundaryClaim {
+        // Hold admission and config through input claiming so shutdown, config replacement,
+        // and starting an event have a consistent ordering. Input guards stay held through
+        // the observation mark; later observations belong to a later batch. The claimed
+        // batch retains its selected config after these locks are released.
+        let admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if admission.shutdown_requested {
+            // Shutdown won admission; cancel pending input instead of starting it.
+            inputs.cancel_pending();
+            BoundaryClaim::Shutdown
+        } else if let Some(event) = inputs.claim_next() {
+            BoundaryClaim::Event {
+                event,
+                config: config.clone(),
+            }
+        } else if command_staged {
+            BoundaryClaim::Command
+        } else {
+            BoundaryClaim::Wait
+        }
+    }
+
+    fn close_admission(&self) {
+        let mut admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        admission.refresh_pending = false;
+        admission.shutdown_requested = true;
+    }
 }
 
 enum RuntimeCommand {
@@ -211,6 +150,7 @@ impl Display for RuntimeRequestError {
 
 impl Error for RuntimeRequestError {}
 
+/// Cloneable caller handle. Requests execute on one dedicated automation worker.
 #[derive(Clone)]
 pub(crate) struct AutomationRuntime {
     shared: Arc<Shared>,
@@ -239,23 +179,12 @@ impl AutomationRuntime {
     ) -> Result<(Self, RuntimeOwner)> {
         let (commands, command_rx) = mpsc::channel(ORDINARY_COMMAND_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
-        let (status, _) = watch::channel(RuntimeStatus::starting());
         let (hid_inventory, _) = watch::channel(Arc::new(HidInventory::default()));
         let (completed, completion_rx) = std::sync::mpsc::channel();
-        let has_config = initial_config.is_some();
+        let health = RuntimeHealth::new(inputs.source_states(), initial_config.is_some());
         let shared = Arc::new(Shared {
             config: RwLock::new(initial_config),
-            health: Mutex::new(RuntimeHealth {
-                sources: inputs.source_states(),
-                refresh_error: None,
-                dispatch_error: None,
-                worker_error: None,
-                has_config,
-                lifecycle: RuntimeLifecycle::Starting,
-            }),
-            status,
-            #[cfg(test)]
-            status_history: Mutex::new(vec![RuntimeStatus::starting()]),
+            health,
             hid_inventory,
             commands,
             shutdown,
@@ -269,17 +198,17 @@ impl AutomationRuntime {
             boundary_claim_gate: Mutex::new(None),
         });
         let runtime = Self { shared };
-        let worker_runtime = runtime.clone();
+        let worker = AutomationWorker::new(
+            runtime.shared.clone(),
+            inputs,
+            command_rx,
+            shutdown_rx,
+            Box::new(backend),
+        );
         let worker = std::thread::Builder::new()
             .name("locked-in-automation".to_string())
             .spawn(move || {
-                worker::run(
-                    worker_runtime,
-                    inputs,
-                    command_rx,
-                    shutdown_rx,
-                    Box::new(backend),
-                );
+                worker.run();
                 let _ = completed.send(());
             })?;
         let owner = RuntimeOwner {
@@ -296,11 +225,11 @@ impl AutomationRuntime {
             .config
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
-        self.update_health(|health| health.has_config = true);
+        self.shared.health.config_installed();
     }
 
     pub fn subscribe_status(&self) -> watch::Receiver<RuntimeStatus> {
-        self.shared.status.subscribe()
+        self.shared.health.subscribe()
     }
 
     pub fn subscribe_hid_inventory(&self) -> watch::Receiver<Arc<HidInventory>> {
@@ -342,9 +271,7 @@ impl AutomationRuntime {
                 response,
             }) {
                 Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    return Err(RuntimeRequestError::Busy);
-                }
+                Err(mpsc::error::TrySendError::Full(_)) => return Err(RuntimeRequestError::Busy),
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     return Err(RuntimeRequestError::Unavailable);
                 }
@@ -367,12 +294,9 @@ impl AutomationRuntime {
         if admission.refresh_pending {
             return Ok(HidRefreshRequestResult::AlreadyPending);
         }
-
         match self.shared.commands.try_send(RuntimeCommand::RefreshHid) {
             Ok(()) => admission.refresh_pending = true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                return Err(RuntimeRequestError::Busy);
-            }
+            Err(mpsc::error::TrySendError::Full(_)) => return Err(RuntimeRequestError::Busy),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 return Err(RuntimeRequestError::Unavailable);
             }
@@ -390,107 +314,8 @@ impl AutomationRuntime {
             return;
         }
         admission.shutdown_requested = true;
-        self.update_health(|health| {
-            if health.lifecycle != RuntimeLifecycle::Stopped {
-                health.lifecycle = RuntimeLifecycle::Stopping;
-            }
-        });
+        self.shared.health.begin_stopping();
         self.shared.shutdown.send_replace(true);
-    }
-
-    fn claim_initialization(&self, inputs: &RuntimeInputs) -> bool {
-        let admission = self
-            .shared
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !admission.shutdown_requested {
-            return true;
-        }
-
-        inputs.cancel_pending();
-        false
-    }
-
-    fn claim_boundary(&self, inputs: &mut RuntimeInputs, command_staged: bool) -> BoundaryClaim {
-        // Admission and config are held before inputs inspect and mark their latest observations.
-        // Input guards stay held through that mark; later observations belong to a later batch.
-        let admission = self
-            .shared
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let config = self
-            .shared
-            .config
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let claim = if admission.shutdown_requested {
-            inputs.cancel_pending();
-            BoundaryClaim::Shutdown
-        } else if let Some(event) = inputs.claim_next() {
-            BoundaryClaim::Event {
-                event,
-                config: config.clone(),
-            }
-        } else if command_staged {
-            BoundaryClaim::Command
-        } else {
-            BoundaryClaim::Wait
-        };
-
-        drop(config);
-        drop(admission);
-        claim
-    }
-
-    fn update_health(&self, update: impl FnOnce(&mut RuntimeHealth)) {
-        let mut health = self
-            .shared
-            .health
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        update(&mut health);
-        let status = health.status();
-        self.shared.status.send_replace(status.clone());
-        #[cfg(test)]
-        self.shared
-            .status_history
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(status);
-    }
-
-    fn publish_hid_inventory(&self, inventory: HidInventory) {
-        self.shared.hid_inventory.send_replace(Arc::new(inventory));
-    }
-
-    fn publish_hid_inventory_if_changed(&self, inventory: HidInventory) -> bool {
-        let changed = self.shared.hid_inventory.borrow().as_ref() != &inventory;
-        if changed {
-            self.publish_hid_inventory(inventory);
-        }
-        changed
-    }
-
-    fn publish_completed_hid_refresh(&self, inventory: HidInventory) {
-        let mut admission = self
-            .shared
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.publish_hid_inventory(inventory);
-        admission.refresh_pending = false;
-    }
-
-    fn close_admission(&self) {
-        let mut admission = self
-            .shared
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        admission.refresh_pending = false;
-        admission.shutdown_requested = true;
     }
 }
 

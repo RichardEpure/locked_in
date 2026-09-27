@@ -38,7 +38,7 @@ impl FocusInput {
         &self.state
     }
 
-    /// The runtime holds admission and config before taking observation and marker guards.
+    /// Claims the latest unhandled observation and records its generation as started.
     pub(super) fn claim_next(&mut self) -> Option<Event> {
         let observation = self.observations.borrow_and_update();
         let mut markers = self
@@ -55,7 +55,7 @@ impl FocusInput {
         })
     }
 
-    /// The runtime holds admission after shutdown has won the claim.
+    /// Records the latest unhandled generation as cancelled.
     pub(super) fn cancel_pending(&self) {
         let observation = self.observations.borrow();
         let mut markers = self

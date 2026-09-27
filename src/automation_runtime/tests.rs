@@ -71,24 +71,11 @@ impl AutomationRuntime {
     }
 
     fn status(&self) -> RuntimeStatus {
-        self.shared.status.borrow().clone()
+        self.subscribe_status().borrow().clone()
     }
 
     fn hid_inventory(&self) -> Arc<HidInventory> {
         self.shared.hid_inventory.borrow().clone()
-    }
-
-    pub(super) fn wait_before_initialization_claim(&self) {
-        let gate = self
-            .shared
-            .initialization_claim_gate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        if let Some(gate) = gate {
-            gate.started.send(()).unwrap();
-            gate.release.recv().unwrap();
-        }
     }
 
     fn gate_next_focus_boundary_claim(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -105,10 +92,15 @@ impl AutomationRuntime {
         (started_rx, release_tx)
     }
 
-    pub(super) fn wait_before_event_boundary_claim(&self) {
+    fn status_history(&self) -> Vec<RuntimeStatus> {
+        self.shared.health.history()
+    }
+}
+
+impl super::Shared {
+    pub(super) fn wait_before_initialization_claim(&self) {
         let gate = self
-            .shared
-            .boundary_claim_gate
+            .initialization_claim_gate
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
@@ -118,12 +110,16 @@ impl AutomationRuntime {
         }
     }
 
-    fn status_history(&self) -> Vec<RuntimeStatus> {
-        self.shared
-            .status_history
+    pub(super) fn wait_before_event_boundary_claim(&self) {
+        let gate = self
+            .boundary_claim_gate
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .take();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
     }
 }
 
