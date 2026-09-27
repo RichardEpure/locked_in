@@ -13,7 +13,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    config::{CompiledConfig, Device, PublishedConfig, SendAction},
+    config::{CompiledConfig, Device, PublishedConfig},
     event::Event,
     hid::{HidBackend, HidInventory},
 };
@@ -117,10 +117,10 @@ impl Shared {
 }
 
 enum RuntimeCommand {
-    TestAction {
-        action: SendAction,
+    TestReport {
+        report: Vec<u8>,
         devices: Vec<Device>,
-        response: oneshot::Sender<std::result::Result<TestDispatchResult, RuntimeRequestError>>,
+        response: oneshot::Sender<TestDispatchResult>,
     },
     RefreshHid,
 }
@@ -229,25 +229,20 @@ impl AutomationRuntime {
         self.shared.hid_inventory.subscribe()
     }
 
-    pub async fn test_action(
+    pub async fn test_report(
         &self,
-        action: SendAction,
+        report: Vec<u8>,
         devices: Vec<Device>,
     ) -> std::result::Result<TestDispatchResult, RuntimeRequestError> {
-        let receiver = self.admit_test_action(action, devices)?;
-        receiver
-            .await
-            .unwrap_or(Err(RuntimeRequestError::Cancelled))
+        let receiver = self.admit_test_report(report, devices)?;
+        receiver.await.map_err(|_| RuntimeRequestError::Cancelled)
     }
 
-    fn admit_test_action(
+    fn admit_test_report(
         &self,
-        action: SendAction,
+        report: Vec<u8>,
         devices: Vec<Device>,
-    ) -> std::result::Result<
-        oneshot::Receiver<std::result::Result<TestDispatchResult, RuntimeRequestError>>,
-        RuntimeRequestError,
-    > {
+    ) -> std::result::Result<oneshot::Receiver<TestDispatchResult>, RuntimeRequestError> {
         let (response, receiver) = oneshot::channel();
         {
             let admission = self
@@ -258,8 +253,8 @@ impl AutomationRuntime {
             if admission.shutdown_requested {
                 return Err(RuntimeRequestError::Unavailable);
             }
-            match self.shared.commands.try_send(RuntimeCommand::TestAction {
-                action,
+            match self.shared.commands.try_send(RuntimeCommand::TestReport {
+                report,
                 devices,
                 response,
             }) {

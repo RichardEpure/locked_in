@@ -1,7 +1,7 @@
 mod system;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
     hash::Hash,
@@ -239,12 +239,17 @@ impl Clock for SystemClock {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Resolution<Locator> {
+    Observed(Vec<Locator>),
+    Invalidated,
+}
+
 struct HidCore<I: HidIo, C: Clock> {
     io: I,
     clock: C,
     inventory: HidInventory,
-    locators: HashMap<InterfaceSelector, Vec<I::Locator>>,
-    invalidated: HashSet<InterfaceSelector>,
+    resolutions: HashMap<InterfaceSelector, Resolution<I::Locator>>,
     last_refresh_attempt: Option<Duration>,
 }
 
@@ -254,8 +259,7 @@ impl<I: HidIo, C: Clock> HidCore<I, C> {
             io,
             clock,
             inventory: HidInventory::default(),
-            locators: HashMap::new(),
-            invalidated: HashSet::new(),
+            resolutions: HashMap::new(),
             last_refresh_attempt: None,
         }
     }
@@ -275,14 +279,13 @@ impl<I: HidIo, C: Clock> HidCore<I, C> {
 
         match self.io.enumerate() {
             Ok(observed) => {
-                let (rows, locators) = group_observed(observed);
+                let (rows, resolutions) = group_observed(observed);
                 self.inventory.rows = rows;
-                self.locators = locators;
-                self.invalidated.clear();
+                self.resolutions = resolutions;
                 self.inventory.refresh_state = HidRefreshState::Ready;
             }
             Err(error) => {
-                self.locators.clear();
+                self.resolutions.clear();
                 self.inventory.refresh_state = HidRefreshState::Failed { error };
             }
         }
@@ -292,6 +295,7 @@ impl<I: HidIo, C: Clock> HidCore<I, C> {
     fn send_report(&mut self, device: &Device, payload: &[u8]) -> Result<(), HidError> {
         let framed = frame_report(device.report_id, device.report_length, payload)?;
         let selector = InterfaceSelector::from(device);
+        // One refresh per send, shared by resolution and stale-open recovery.
         let mut refreshed = false;
 
         let mut locator = match self.resolve(selector) {
@@ -304,42 +308,32 @@ impl<I: HidIo, C: Clock> HidCore<I, C> {
             Err(error) => return Err(error),
         };
 
-        let mut handle = match self.io.open(&locator) {
-            Ok(handle) => handle,
-            Err(_) if !refreshed => {
-                self.locators.remove(&selector);
-                self.invalidated.insert(selector);
-                self.refresh_internal();
-                refreshed = true;
-                locator = self.resolve(selector)?;
-                match self.io.open(&locator) {
-                    Ok(handle) => handle,
-                    Err(message) => {
-                        self.locators.remove(&selector);
-                        self.invalidated.insert(selector);
+        let mut handle = loop {
+            match self.io.open(&locator) {
+                Ok(handle) => break handle,
+                Err(message) => {
+                    self.resolutions.insert(selector, Resolution::Invalidated);
+                    if refreshed {
                         return Err(HidError::Open { selector, message });
                     }
+                    // A stale open may bypass cooldown, but can only retry once.
+                    self.refresh_internal();
+                    refreshed = true;
+                    locator = self.resolve(selector)?;
                 }
-            }
-            Err(message) => {
-                self.locators.remove(&selector);
-                self.invalidated.insert(selector);
-                return Err(HidError::Open { selector, message });
             }
         };
 
-        debug_assert!(refreshed || self.locators.contains_key(&selector));
+        // A failed write may already have delivered data; never retry it.
         let written = match self.io.write(&mut handle, &framed) {
             Ok(written) => written,
             Err(message) => {
-                self.locators.remove(&selector);
-                self.invalidated.insert(selector);
+                self.resolutions.insert(selector, Resolution::Invalidated);
                 return Err(HidError::Write { selector, message });
             }
         };
         if written != framed.len() {
-            self.locators.remove(&selector);
-            self.invalidated.insert(selector);
+            self.resolutions.insert(selector, Resolution::Invalidated);
             return Err(HidError::ShortWrite {
                 selector,
                 expected: framed.len(),
@@ -357,16 +351,17 @@ impl<I: HidIo, C: Clock> HidCore<I, C> {
             }
             HidRefreshState::Ready => {}
         }
-        if self.invalidated.contains(&selector) {
-            return Err(HidError::ResolutionInvalidated { selector });
-        }
-        match self.locators.get(&selector).map(Vec::as_slice) {
-            Some([locator]) => Ok(locator.clone()),
-            Some(locators) if locators.len() > 1 => Err(HidError::Ambiguous {
-                selector,
-                matches: locators.len(),
-            }),
-            _ => Err(HidError::Disconnected { selector }),
+        match self.resolutions.get(&selector) {
+            Some(Resolution::Invalidated) => Err(HidError::ResolutionInvalidated { selector }),
+            Some(Resolution::Observed(locators)) => match locators.as_slice() {
+                [locator] => Ok(locator.clone()),
+                [] => Err(HidError::Disconnected { selector }),
+                _ => Err(HidError::Ambiguous {
+                    selector,
+                    matches: locators.len(),
+                }),
+            },
+            None => Err(HidError::Disconnected { selector }),
         }
     }
 
@@ -381,7 +376,7 @@ fn group_observed<Locator: Clone>(
     observed: Vec<ObservedInterface<Locator>>,
 ) -> (
     Vec<HidInventoryRow>,
-    HashMap<InterfaceSelector, Vec<Locator>>,
+    HashMap<InterfaceSelector, Resolution<Locator>>,
 ) {
     let mut grouped: HashMap<InterfaceSelector, Vec<ObservedInterface<Locator>>> = HashMap::new();
     for interface in observed {
@@ -392,7 +387,7 @@ fn group_observed<Locator: Clone>(
     }
 
     let mut rows = Vec::with_capacity(grouped.len());
-    let mut locators = HashMap::with_capacity(grouped.len());
+    let mut resolutions = HashMap::with_capacity(grouped.len());
     for (selector, interfaces) in grouped {
         let fallback = format!("{:04X}:{:04X}", selector.vendor_id, selector.product_id);
         let mut names = interfaces
@@ -409,12 +404,14 @@ fn group_observed<Locator: Clone>(
             name,
             match_count: interfaces.len(),
         });
-        locators.insert(
+        resolutions.insert(
             selector,
-            interfaces
-                .into_iter()
-                .map(|interface| interface.locator)
-                .collect(),
+            Resolution::Observed(
+                interfaces
+                    .into_iter()
+                    .map(|interface| interface.locator)
+                    .collect(),
+            ),
         );
     }
     rows.sort_by(|left, right| {
@@ -422,7 +419,7 @@ fn group_observed<Locator: Clone>(
             .cmp(&right.name)
             .then(left.selector.cmp(&right.selector))
     });
-    (rows, locators)
+    (rows, resolutions)
 }
 
 fn display_name<Locator>(interface: &ObservedInterface<Locator>, fallback: &str) -> String {

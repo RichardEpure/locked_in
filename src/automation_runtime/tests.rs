@@ -1,7 +1,9 @@
 use std::{
     collections::VecDeque,
     future::Future,
+    pin::Pin,
     sync::{Arc, Mutex, mpsc},
+    task::{Context, Poll, Waker},
     thread,
     time::{Duration, Instant},
 };
@@ -115,7 +117,7 @@ impl AutomationRuntime {
         self.shared.hid_inventory.borrow().clone()
     }
 
-    fn gate_next_focus_boundary_claim(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    fn gate_next_boundary_claim(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         *self
@@ -147,7 +149,7 @@ impl super::Shared {
         }
     }
 
-    pub(super) fn wait_before_event_boundary_claim(&self) {
+    pub(super) fn wait_before_boundary_claim(&self) {
         let gate = self
             .boundary_claim_gate
             .lock()
@@ -189,15 +191,24 @@ enum BackendEvent {
 
 type Gate = (mpsc::Sender<()>, mpsc::Receiver<()>);
 
+fn gate_next_io(gates: &mut VecDeque<Option<Gate>>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (started_tx, started) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    gates.push_back(Some((started_tx, release_rx)));
+    (started, release)
+}
+
 struct RecordingBackend {
     events: mpsc::Sender<BackendEvent>,
     inventory: HidInventory,
     refresh_results: VecDeque<HidInventory>,
     refresh_gates: VecDeque<Option<Gate>>,
     failed_devices: Arc<Mutex<Vec<String>>>,
+    sent_devices: Arc<Mutex<Vec<Device>>>,
     send_gates: VecDeque<Option<Gate>>,
     send_inventories: VecDeque<HidInventory>,
     panic_on_refresh: bool,
+    panic_on_send: bool,
 }
 
 impl HidBackend for RecordingBackend {
@@ -225,6 +236,7 @@ impl HidBackend for RecordingBackend {
     }
 
     fn send_report(&mut self, device: &Device, report: &[u8]) -> Result<(), HidError> {
+        self.sent_devices.lock().unwrap().push(device.clone());
         self.events
             .send(BackendEvent::Send(device.id.clone(), report.to_vec()))
             .unwrap();
@@ -232,6 +244,7 @@ impl HidBackend for RecordingBackend {
             started.send(()).unwrap();
             release.recv().unwrap();
         }
+        assert!(!self.panic_on_send, "configured send panic");
         if let Some(inventory) = self.send_inventories.pop_front() {
             self.inventory = inventory;
         }
@@ -276,9 +289,11 @@ fn backend(
             refresh_results: refresh_results.into_iter().collect(),
             refresh_gates: VecDeque::new(),
             failed_devices: Arc::new(Mutex::new(Vec::new())),
+            sent_devices: Arc::new(Mutex::new(Vec::new())),
             send_gates: VecDeque::new(),
             send_inventories: VecDeque::new(),
             panic_on_refresh: false,
+            panic_on_send: false,
         },
         received,
     )
@@ -290,13 +305,6 @@ fn device(id: &str) -> Device {
         name: id.to_string(),
         report_length: 32,
         ..Device::default()
-    }
-}
-
-fn action(report: u8) -> SendAction {
-    SendAction {
-        report: vec![report],
-        ..SendAction::default()
     }
 }
 
@@ -405,6 +413,10 @@ fn block_on<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
+fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
+}
+
 fn wait_until(mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(1);
     while !condition() {
@@ -458,9 +470,7 @@ fn finish_startup(
 fn startup_publishes_refreshing_before_the_final_inventory_and_status() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1), ready(2)]);
-    let (started_tx, started) = mpsc::channel();
-    let (release_tx, release) = mpsc::channel();
-    backend.refresh_gates.push_back(Some((started_tx, release)));
+    let (started, release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(Some(config(1, &["one"])), focus_rx, backend);
     let inventory = runtime.subscribe_hid_inventory();
 
@@ -549,11 +559,7 @@ fn shutdown_completed_before_initialization_claim_cancels_startup_refresh() {
 fn shutdown_after_initialization_claim_waits_for_atomic_startup_refresh() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (refresh_started_tx, refresh_started) = mpsc::channel();
-    let (refresh_release_tx, refresh_release) = mpsc::channel();
-    backend
-        .refresh_gates
-        .push_back(Some((refresh_started_tx, refresh_release)));
+    let (refresh_started, refresh_release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
 
     refresh_started.recv().unwrap();
@@ -575,7 +581,7 @@ fn shutdown_completed_before_claim_cancels_the_provisional_focus() {
     let (runtime, owner, progress) =
         start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
-    let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
 
     focus_tx.send_replace(focused(1, "target"));
     claim_reached.recv().unwrap();
@@ -605,7 +611,7 @@ fn newer_focus_completed_before_claim_replaces_the_provisional_generation() {
         backend,
     );
     finish_startup(&runtime, &events, 1);
-    let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
 
     focus_tx.send_replace(focused(1, "A"));
     claim_reached.recv().unwrap();
@@ -636,7 +642,7 @@ fn config_replacement_completed_before_claim_supplies_the_focus_snapshot() {
     let (backend, events) = backend([ready(1)]);
     let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
-    let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
 
     focus_tx.send_replace(focused(1, "target"));
     claim_reached.recv().unwrap();
@@ -693,7 +699,7 @@ fn coordinator_publication_closes_startup_and_claim_gaps_and_survives_source_clo
         events.recv_timeout(Duration::from_secs(2)).unwrap(),
         BackendEvent::Send("automatic".into(), vec![0x20])
     );
-    let (claim_reached, release_claim) = runtime.gate_next_focus_boundary_claim();
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
     focus_tx.send_replace(focused(2, "target newer"));
     claim_reached.recv_timeout(Duration::from_secs(2)).unwrap();
     coordinator.update(2, config(0x30, &["automatic"])).unwrap();
@@ -713,55 +719,82 @@ fn coordinator_publication_closes_startup_and_claim_gaps_and_survives_source_clo
 }
 
 #[test]
-fn focus_precedes_an_admitted_command_at_the_same_worker_boundary() {
+fn newest_focus_arriving_after_command_staging_runs_before_fifo_commands() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
-    let (mut backend, events) = backend([ready(1)]);
-    let (refresh_started_tx, refresh_started) = mpsc::channel();
-    let (refresh_release_tx, refresh_release) = mpsc::channel();
-    backend
-        .refresh_gates
-        .push_back(Some((refresh_started_tx, refresh_release)));
-    let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
+    let (backend, events) = backend([ready(1)]);
+    let (runtime, owner) = start(
+        Some(routed_config(&[("A", 0x0a), ("B", 0x0b)])),
+        focus_rx,
+        backend,
+    );
+    finish_startup(&runtime, &events, 1);
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
+    let staged = runtime
+        .admit_test_report(vec![0x20], vec![device("staged")])
+        .unwrap();
+    claim_reached.recv_timeout(Duration::from_secs(1)).unwrap();
+    let queued = runtime
+        .admit_test_report(vec![0x30], vec![device("queued")])
+        .unwrap();
+    focus_tx.send_replace(focused(1, "A"));
+    focus_tx.send_replace(focused(2, "B"));
+    release_claim.send(()).unwrap();
 
-    refresh_started.recv().unwrap();
-    assert_eq!(events.recv().unwrap(), BackendEvent::RefreshStarted);
-    focus_tx.send_replace(focused(1, "target"));
-
-    block_on(async {
-        let test_runtime = runtime.clone();
-        let test = tokio::spawn(async move {
-            test_runtime
-                .test_action(action(0x20), vec![device("manual")])
-                .await
-                .unwrap()
-        });
-        tokio::task::yield_now().await;
-        refresh_release_tx.send(()).unwrap();
-
-        assert_eq!(events.recv().unwrap(), BackendEvent::RefreshFinished(1));
+    for expected in [
+        BackendEvent::Send("automatic".into(), vec![0x0b]),
+        BackendEvent::Send("staged".into(), vec![0x20]),
+        BackendEvent::Send("queued".into(), vec![0x30]),
+    ] {
         assert_eq!(
-            events.recv().unwrap(),
-            BackendEvent::Send("automatic".to_string(), vec![0x10])
+            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            expected
         );
-        assert_eq!(
-            events.recv().unwrap(),
-            BackendEvent::Send("manual".to_string(), vec![0x20])
-        );
-        assert_eq!(test.await.unwrap().sent, 1);
-    });
-
+    }
+    assert_eq!(block_on(staged).unwrap().sent, 1);
+    assert_eq!(block_on(queued).unwrap().sent, 1);
     owner.shutdown_and_join(Duration::from_secs(1));
+    assert!(events.try_recv().is_err());
 }
 
 #[test]
-fn pending_focus_coalesces_to_the_newest_observation_before_start() {
+fn shutdown_after_staging_cancels_tests_before_stopped_and_preempts_pending_focus() {
+    let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
+    let (backend, events) = backend([ready(1)]);
+    let (runtime, owner, progress) =
+        start_with_progress(Some(config(0x10, &["automatic"])), focus_rx, backend);
+    finish_startup(&runtime, &events, 1);
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
+    let mut staged = Box::pin(runtime.test_report(vec![0x20], vec![device("staged")]));
+    assert!(poll_once(staged.as_mut()).is_pending());
+    claim_reached.recv_timeout(Duration::from_secs(1)).unwrap();
+    let mut queued = Box::pin(runtime.test_report(vec![0x30], vec![device("queued")]));
+    assert!(poll_once(queued.as_mut()).is_pending());
+    runtime.request_hid_refresh().unwrap();
+    focus_tx.send_replace(focused(1, "target"));
+    runtime.request_shutdown();
+    release_claim.send(()).unwrap();
+
+    wait_for_phase(&runtime, RuntimePhase::Stopped);
+    for response in [&mut staged, &mut queued] {
+        assert_eq!(
+            poll_once(response.as_mut()),
+            Poll::Ready(Err(RuntimeRequestError::Cancelled))
+        );
+    }
+    assert_eq!(focus_progress(&progress).latest_cancelled, Some(1));
+    assert_eq!(
+        block_on(runtime.test_report(vec![0x40], vec![device("late")])),
+        Err(RuntimeRequestError::Unavailable)
+    );
+    owner.shutdown_and_join(Duration::from_secs(1));
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn startup_coalesces_pending_focus_and_dispatches_it_before_admitted_commands() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (refresh_started_tx, refresh_started) = mpsc::channel();
-    let (refresh_release_tx, refresh_release) = mpsc::channel();
-    backend
-        .refresh_gates
-        .push_back(Some((refresh_started_tx, refresh_release)));
+    let (refresh_started, refresh_release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(
         Some(routed_config(&[("A", 0x0a), ("B", 0x0b)])),
         focus_rx,
@@ -772,6 +805,9 @@ fn pending_focus_coalesces_to_the_newest_observation_before_start() {
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshStarted);
     focus_tx.send_replace(focused(1, "A"));
     focus_tx.send_replace(focused(2, "B"));
+    let manual = runtime
+        .admit_test_report(vec![0x20], vec![device("manual")])
+        .unwrap();
     refresh_release_tx.send(()).unwrap();
 
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshFinished(1));
@@ -779,6 +815,11 @@ fn pending_focus_coalesces_to_the_newest_observation_before_start() {
         events.recv().unwrap(),
         BackendEvent::Send("automatic".to_string(), vec![0x0b])
     );
+    assert_eq!(
+        events.recv().unwrap(),
+        BackendEvent::Send("manual".into(), vec![0x20])
+    );
+    assert_eq!(block_on(manual).unwrap().sent, 1);
     wait_for_phase(&runtime, RuntimePhase::Active);
     runtime.request_shutdown();
     owner.shutdown_and_join(Duration::from_secs(1));
@@ -789,11 +830,7 @@ fn pending_focus_coalesces_to_the_newest_observation_before_start() {
 fn replacement_before_a_focus_boundary_supplies_that_batch_snapshot() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (refresh_started_tx, refresh_started) = mpsc::channel();
-    let (refresh_release_tx, refresh_release) = mpsc::channel();
-    backend
-        .refresh_gates
-        .push_back(Some((refresh_started_tx, refresh_release)));
+    let (refresh_started, refresh_release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
 
     refresh_started.recv().unwrap();
@@ -814,16 +851,12 @@ fn replacement_before_a_focus_boundary_supplies_that_batch_snapshot() {
 fn focus_precedes_queued_test_and_explicit_refresh_after_an_atomic_batch() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1), ready(2)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     let running = runtime
-        .admit_test_action(action(0x01), vec![device("running")])
+        .admit_test_report(vec![0x01], vec![device("running")])
         .unwrap();
     send_started.recv().unwrap();
     assert_eq!(
@@ -835,7 +868,7 @@ fn focus_precedes_queued_test_and_explicit_refresh_after_an_atomic_batch() {
         HidRefreshRequestResult::Queued
     );
     let queued = runtime
-        .admit_test_action(action(0x02), vec![device("queued")])
+        .admit_test_report(vec![0x02], vec![device("queued")])
         .unwrap();
     focus_tx.send_replace(focused(1, "target"));
     send_release_tx.send(()).unwrap();
@@ -850,8 +883,8 @@ fn focus_precedes_queued_test_and_explicit_refresh_after_an_atomic_batch() {
         events.recv().unwrap(),
         BackendEvent::Send("queued".to_string(), vec![0x02])
     );
-    assert_eq!(block_on(running).unwrap().unwrap().sent, 1);
-    assert_eq!(block_on(queued).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(running).unwrap().sent, 1);
+    assert_eq!(block_on(queued).unwrap().sent, 1);
     owner.shutdown_and_join(Duration::from_secs(1));
 }
 
@@ -862,9 +895,7 @@ fn accepted_test_may_starve_during_focus_churn_then_recovers() {
     let mut releases = Vec::new();
     let mut starts = Vec::new();
     for _ in 0..3 {
-        let (started_tx, started) = mpsc::channel();
-        let (release_tx, release) = mpsc::channel();
-        backend.send_gates.push_back(Some((started_tx, release)));
+        let (started, release_tx) = gate_next_io(&mut backend.send_gates);
         starts.push(started);
         releases.push(release_tx);
     }
@@ -878,7 +909,7 @@ fn accepted_test_may_starve_during_focus_churn_then_recovers() {
         BackendEvent::Send("automatic".to_string(), vec![0x10])
     );
     let starved = runtime
-        .admit_test_action(action(0x20), vec![device("manual")])
+        .admit_test_report(vec![0x20], vec![device("manual")])
         .unwrap();
 
     for generation in 2..=3 {
@@ -896,7 +927,7 @@ fn accepted_test_may_starve_during_focus_churn_then_recovers() {
         events.recv().unwrap(),
         BackendEvent::Send("manual".to_string(), vec![0x20])
     );
-    assert_eq!(block_on(starved).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(starved).unwrap().sent, 1);
     owner.shutdown_and_join(Duration::from_secs(1));
 }
 
@@ -910,13 +941,13 @@ fn no_action_focus_is_handled_without_retriggering_after_replacement() {
 
     focus_tx.send_replace(focused(1, "unmatched"));
     let marker = runtime
-        .admit_test_action(action(0x30), vec![device("marker")])
+        .admit_test_report(vec![0x30], vec![device("marker")])
         .unwrap();
     assert_eq!(
         events.recv().unwrap(),
         BackendEvent::Send("marker".to_string(), vec![0x30])
     );
-    assert_eq!(block_on(marker).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(marker).unwrap().sent, 1);
     assert_eq!(focus_progress(&progress).latest_handled, Some(1));
 
     replace_config_for_test(&runtime, routed_config(&[("unmatched", 0x20)])).unwrap();
@@ -957,14 +988,12 @@ fn startup_failure_stays_degraded_after_test_and_explicit_refresh_recovers() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([failed(1, "startup"), ready(2)]);
     backend.refresh_gates.push_back(None);
-    let (started_tx, started) = mpsc::channel();
-    let (release_tx, release) = mpsc::channel();
-    backend.refresh_gates.push_back(Some((started_tx, release)));
+    let (started, release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(Some(config(1, &["one"])), focus_rx, backend);
 
     finish_startup(&runtime, &events, 1);
     assert_eq!(runtime.status().phase, RuntimePhase::Degraded);
-    let result = block_on(runtime.test_action(action(0x44), vec![device("one")])).unwrap();
+    let result = block_on(runtime.test_report(vec![0x44], vec![device("one")])).unwrap();
     assert_eq!(result.sent, 1);
     assert_eq!(
         events.recv().unwrap(),
@@ -994,23 +1023,15 @@ fn startup_failure_stays_degraded_after_test_and_explicit_refresh_recovers() {
 fn refresh_requests_coalesce_until_completion_then_allow_another_request() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1), ready(2), ready(3)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     backend.refresh_gates.push_back(None);
-    let (refresh_started_tx, refresh_started) = mpsc::channel();
-    let (refresh_release_tx, refresh_release) = mpsc::channel();
-    backend
-        .refresh_gates
-        .push_back(Some((refresh_started_tx, refresh_release)));
+    let (refresh_started, refresh_release_tx) = gate_next_io(&mut backend.refresh_gates);
     let (runtime, owner) = start(Some(config(1, &["one"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     let test_runtime = runtime.clone();
     let test = thread::spawn(move || {
-        block_on(test_runtime.test_action(action(1), vec![device("one")])).unwrap()
+        block_on(test_runtime.test_report(vec![1], vec![device("one")])).unwrap()
     });
     send_started.recv().unwrap();
     assert!(matches!(events.recv().unwrap(), BackendEvent::Send(..)));
@@ -1050,14 +1071,53 @@ fn refresh_requests_coalesce_until_completion_then_allow_another_request() {
 }
 
 #[test]
+fn manual_report_keeps_ordered_device_snapshots_and_continues_after_each_failure() {
+    let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
+    let (backend, events) = backend([ready(1)]);
+    *backend.failed_devices.lock().unwrap() = vec!["third".into(), "first".into()];
+    let sent_devices = backend.sent_devices.clone();
+    let mut initial = config(0x10, &["first", "second", "third"]);
+    // The first two durable devices alias a selector with different wire framing.
+    initial.devices[0].report_id = 1;
+    initial.devices[0].report_length = 2;
+    initial.devices[1].report_id = 7;
+    initial.devices[1].report_length = 6;
+    let destinations = vec![
+        initial.devices[2].clone(),
+        initial.devices[0].clone(),
+        initial.devices[1].clone(),
+    ];
+    let (runtime, owner) = start(Some(initial), focus_rx, backend);
+    finish_startup(&runtime, &events, 1);
+    let (claim_reached, release_claim) = runtime.gate_next_boundary_claim();
+    let mut response = Box::pin(runtime.test_report(vec![0x45, 0x67], destinations.clone()));
+    assert!(poll_once(response.as_mut()).is_pending());
+    claim_reached.recv_timeout(Duration::from_secs(1)).unwrap();
+    // Even removing the durable destinations cannot change an accepted Test snapshot.
+    replace_config_for_test(&runtime, EditableConfig::default()).unwrap();
+    release_claim.send(()).unwrap();
+
+    let result = block_on(response).unwrap();
+    assert_eq!(result.sent, 1);
+    assert_eq!(result.failures.len(), 2);
+    assert!(result.failures[0].starts_with("third: failed to write HID interface"));
+    assert!(result.failures[1].starts_with("first: failed to write HID interface"));
+    assert_eq!(*sent_devices.lock().unwrap(), destinations);
+    for id in ["third", "first", "second"] {
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            BackendEvent::Send(id.into(), vec![0x45, 0x67])
+        );
+    }
+    owner.shutdown_and_join(Duration::from_secs(1));
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
 fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1), ready(2)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner) = start(Some(config(1, &["one"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
@@ -1065,7 +1125,7 @@ fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
         let first_runtime = runtime.clone();
         let first = tokio::spawn(async move {
             first_runtime
-                .test_action(action(1), vec![device("one"), device("two")])
+                .test_report(vec![1], vec![device("one"), device("two")])
                 .await
                 .unwrap()
         });
@@ -1083,7 +1143,7 @@ fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
         let second_runtime = runtime.clone();
         let second = tokio::spawn(async move {
             second_runtime
-                .test_action(action(2), vec![device("three")])
+                .test_report(vec![2], vec![device("three")])
                 .await
                 .unwrap()
         });
@@ -1109,7 +1169,7 @@ fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
             Err(RuntimeRequestError::Unavailable)
         );
         assert_eq!(
-            runtime.test_action(action(3), vec![device("late")]).await,
+            runtime.test_report(vec![3], vec![device("late")]).await,
             Err(RuntimeRequestError::Unavailable)
         );
     });
@@ -1123,16 +1183,12 @@ fn admitted_test_refresh_and_test_execute_fifo_without_interleaving() {
 fn saturated_queue_rejects_ordinary_work_but_shutdown_cancels_every_queued_test() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner) = start(Some(config(1, &["running"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     let running = runtime
-        .admit_test_action(action(1), vec![device("running")])
+        .admit_test_report(vec![1], vec![device("running")])
         .unwrap();
     send_started.recv().unwrap();
     assert_eq!(
@@ -1143,12 +1199,12 @@ fn saturated_queue_rejects_ordinary_work_but_shutdown_cancels_every_queued_test(
     let queued = (0..ORDINARY_COMMAND_CAPACITY)
         .map(|index| {
             runtime
-                .admit_test_action(action(2), vec![device(&format!("queued-{index}"))])
+                .admit_test_report(vec![2], vec![device(&format!("queued-{index}"))])
                 .unwrap()
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        block_on(runtime.test_action(action(3), vec![device("full")])),
+        block_on(runtime.test_report(vec![3], vec![device("full")])),
         Err(RuntimeRequestError::Busy)
     );
     assert_eq!(
@@ -1162,12 +1218,9 @@ fn saturated_queue_rejects_ordinary_work_but_shutdown_cancels_every_queued_test(
     assert_eq!(runtime.status().phase, RuntimePhase::Stopping);
     send_release_tx.send(()).unwrap();
 
-    assert_eq!(block_on(running).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(running).unwrap().sent, 1);
     for response in queued {
-        assert_eq!(
-            block_on(response).unwrap(),
-            Err(RuntimeRequestError::Cancelled)
-        );
+        assert!(block_on(response).is_err());
     }
     owner.shutdown_and_join(Duration::from_secs(1));
 
@@ -1179,16 +1232,12 @@ fn saturated_queue_rejects_ordinary_work_but_shutdown_cancels_every_queued_test(
 fn status_publication_does_not_regress_after_shutdown_starts() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner) = start(Some(config(1, &["running"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
     let running = runtime
-        .admit_test_action(action(1), vec![device("running")])
+        .admit_test_report(vec![1], vec![device("running")])
         .unwrap();
     send_started.recv().unwrap();
     assert!(matches!(events.recv().unwrap(), BackendEvent::Send(..)));
@@ -1196,7 +1245,7 @@ fn status_publication_does_not_regress_after_shutdown_starts() {
     assert_eq!(runtime.status().phase, RuntimePhase::Stopping);
 
     send_release_tx.send(()).unwrap();
-    assert_eq!(block_on(running).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(running).unwrap().sent, 1);
     owner.shutdown_and_join(Duration::from_secs(1));
 
     let history = runtime.status_history();
@@ -1215,11 +1264,7 @@ fn status_publication_does_not_regress_after_shutdown_starts() {
 fn automatic_and_manual_batches_do_not_interleave() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner) = start(Some(config(0x10, &["one", "two"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
 
@@ -1231,7 +1276,7 @@ fn automatic_and_manual_batches_do_not_interleave() {
     );
     let test_runtime = runtime.clone();
     let test = thread::spawn(move || {
-        block_on(test_runtime.test_action(action(0x20), vec![device("manual")])).unwrap()
+        block_on(test_runtime.test_report(vec![0x20], vec![device("manual")])).unwrap()
     });
     send_release_tx.send(()).unwrap();
 
@@ -1251,11 +1296,7 @@ fn automatic_and_manual_batches_do_not_interleave() {
 fn blocked_dispatch_keeps_its_snapshot_and_uses_only_latest_pending_focus() {
     let (focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, events) = backend([ready(1)]);
-    let (send_started_tx, send_started) = mpsc::channel();
-    let (send_release_tx, send_release) = mpsc::channel();
-    backend
-        .send_gates
-        .push_back(Some((send_started_tx, send_release)));
+    let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
     let (runtime, owner, progress) =
         start_with_progress(Some(config(0x10, &["one", "two"])), focus_rx, backend);
     finish_startup(&runtime, &events, 1);
@@ -1312,7 +1353,7 @@ fn refresh_and_dispatch_health_have_separate_provenance() {
 
     failed_devices.lock().unwrap().push("one".to_string());
     let result =
-        block_on(runtime.test_action(action(1), vec![device("one"), device("two")])).unwrap();
+        block_on(runtime.test_report(vec![1], vec![device("one"), device("two")])).unwrap();
     assert_eq!(result.sent, 1);
     assert_eq!(result.failures.len(), 1);
     assert_eq!(
@@ -1324,7 +1365,7 @@ fn refresh_and_dispatch_health_have_separate_provenance() {
         BackendEvent::Send("two".to_string(), vec![1])
     );
     assert_eq!(runtime.status().phase, RuntimePhase::Degraded);
-    let empty = block_on(runtime.test_action(action(1), Vec::new())).unwrap();
+    let empty = block_on(runtime.test_report(vec![1], Vec::new())).unwrap();
     assert_eq!(
         empty,
         TestDispatchResult {
@@ -1344,7 +1385,7 @@ fn refresh_and_dispatch_health_have_separate_provenance() {
     assert_eq!(runtime.status().phase, RuntimePhase::Degraded);
 
     failed_devices.lock().unwrap().clear();
-    block_on(runtime.test_action(action(1), vec![device("one")])).unwrap();
+    block_on(runtime.test_report(vec![1], vec![device("one")])).unwrap();
     assert_eq!(
         events.recv().unwrap(),
         BackendEvent::Send("one".to_string(), vec![1])
@@ -1359,7 +1400,7 @@ fn refresh_and_dispatch_health_have_separate_provenance() {
     assert_eq!(events.recv().unwrap(), BackendEvent::RefreshFinished(3));
     wait_for_revision(&runtime, 3);
     wait_for_phase(&runtime, RuntimePhase::Degraded);
-    block_on(runtime.test_action(action(1), vec![device("one")])).unwrap();
+    block_on(runtime.test_report(vec![1], vec![device("one")])).unwrap();
     assert_eq!(
         events.recv().unwrap(),
         BackendEvent::Send("one".to_string(), vec![1])
@@ -1379,7 +1420,7 @@ fn send_publishes_implicit_refresh_outcomes() {
     finish_startup(&runtime, &events, 1);
     let mut inventory = runtime.subscribe_hid_inventory();
 
-    block_on(runtime.test_action(action(1), vec![device("one")])).unwrap();
+    block_on(runtime.test_report(vec![1], vec![device("one")])).unwrap();
     block_on(async { inventory.changed().await.unwrap() });
     assert_eq!(inventory.borrow().revision, 2);
     assert!(matches!(
@@ -1388,7 +1429,7 @@ fn send_publishes_implicit_refresh_outcomes() {
     ));
     assert_eq!(runtime.status().phase, RuntimePhase::Degraded);
 
-    block_on(runtime.test_action(action(1), vec![device("one")])).unwrap();
+    block_on(runtime.test_report(vec![1], vec![device("one")])).unwrap();
     block_on(async { inventory.changed().await.unwrap() });
     assert_eq!(inventory.borrow().revision, 3);
     assert_eq!(inventory.borrow().refresh_state, HidRefreshState::Ready);
@@ -1449,13 +1490,13 @@ fn closed_source_finishes_its_last_event_and_keeps_commands_and_shutdown_respons
     );
 
     let response = runtime
-        .admit_test_action(action(0x20), vec![device("manual")])
+        .admit_test_report(vec![0x20], vec![device("manual")])
         .unwrap();
     assert_eq!(
         events.recv_timeout(Duration::from_secs(1)).unwrap(),
         BackendEvent::Send("manual".to_string(), vec![0x20])
     );
-    assert_eq!(block_on(response).unwrap().unwrap().sent, 1);
+    assert_eq!(block_on(response).unwrap().sent, 1);
     assert_eq!(
         runtime.request_hid_refresh(),
         Ok(HidRefreshRequestResult::Queued)
@@ -1475,6 +1516,72 @@ fn closed_source_finishes_its_last_event_and_keeps_commands_and_shutdown_respons
 }
 
 #[test]
+fn worker_failure_cancels_accepted_reports_before_publishing_its_terminal_status() {
+    for staged in [false, true] {
+        for stopping in [false, true] {
+            let (focus_tx, focus_rx) =
+                tokio::sync::watch::channel(ForegroundObservation::default());
+            let (mut backend, events) = backend([ready(1)]);
+            backend.panic_on_send = true;
+            let (send_started, send_release_tx) = gate_next_io(&mut backend.send_gates);
+            let (runtime, owner) = start(Some(config(0x10, &["automatic"])), focus_rx, backend);
+            finish_startup(&runtime, &events, 1);
+
+            let gate = staged.then(|| runtime.gate_next_boundary_claim());
+            let mut first = Box::pin(runtime.test_report(vec![0x20], vec![device("first")]));
+            assert!(poll_once(first.as_mut()).is_pending());
+            if let Some((claim_reached, release_claim)) = gate {
+                claim_reached.recv_timeout(Duration::from_secs(1)).unwrap();
+                // The failing automatic batch leaves this Test staged but unexecuted.
+                focus_tx.send_replace(focused(1, "target"));
+                release_claim.send(()).unwrap();
+            }
+            send_started.recv_timeout(Duration::from_secs(1)).unwrap();
+            let mut queued = Box::pin(runtime.test_report(vec![0x30], vec![device("queued")]));
+            assert!(poll_once(queued.as_mut()).is_pending());
+            runtime.request_hid_refresh().unwrap();
+            if stopping {
+                runtime.request_shutdown();
+            }
+            send_release_tx.send(()).unwrap();
+
+            wait_for_phase(
+                &runtime,
+                if stopping {
+                    RuntimePhase::Stopped
+                } else {
+                    RuntimePhase::Unavailable
+                },
+            );
+            for response in [&mut first, &mut queued] {
+                assert_eq!(
+                    poll_once(response.as_mut()),
+                    Poll::Ready(Err(RuntimeRequestError::Cancelled))
+                );
+            }
+            assert_eq!(
+                runtime.request_hid_refresh(),
+                Err(RuntimeRequestError::Unavailable)
+            );
+            assert_eq!(
+                block_on(runtime.test_report(vec![0x40], vec![device("late")])),
+                Err(RuntimeRequestError::Unavailable)
+            );
+            assert_eq!(
+                events.recv_timeout(Duration::from_secs(1)).unwrap(),
+                if staged {
+                    BackendEvent::Send("automatic".into(), vec![0x10])
+                } else {
+                    BackendEvent::Send("first".into(), vec![0x20])
+                }
+            );
+            owner.shutdown_and_join(Duration::from_secs(1));
+            assert!(events.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
 fn worker_panic_closes_admission_and_clears_pending_refresh() {
     let (_focus_tx, focus_rx) = tokio::sync::watch::channel(ForegroundObservation::default());
     let (mut backend, _events) = backend([]);
@@ -1483,6 +1590,6 @@ fn worker_panic_closes_admission_and_clears_pending_refresh() {
 
     wait_for_phase(&runtime, RuntimePhase::Unavailable);
     assert!(runtime.request_hid_refresh().is_err());
-    assert!(block_on(runtime.test_action(action(1), vec![device("one")])).is_err());
+    assert!(block_on(runtime.test_report(vec![1], vec![device("one")])).is_err());
     owner.shutdown_and_join(Duration::from_secs(1));
 }

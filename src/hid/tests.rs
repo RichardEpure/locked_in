@@ -164,7 +164,10 @@ fn refresh_groups_every_locator_and_sorts_rows_deterministically() {
     assert_eq!(inventory.rows[0].match_count, 2);
     assert_eq!(inventory.rows[1].name, "001E:001F");
     assert_eq!(inventory.rows[2].name, "Alpha");
-    assert_eq!(core.locators[&duplicate], [2, 3]);
+    assert_eq!(
+        core.resolutions[&duplicate],
+        Resolution::Observed(vec![2, 3])
+    );
 }
 
 #[test]
@@ -184,12 +187,21 @@ fn missing_selector_refreshes_once_during_cooldown_then_reports_disconnected() {
 }
 
 #[test]
-fn unique_selector_opens_and_writes_one_complete_framed_report() {
+fn unique_selector_and_its_alias_each_write_one_complete_framed_report() {
     let selected = selector(1);
     let mut core = core([vec![observed(selected, 9, "Device")]]);
     core.refresh();
+    let first = device(selected);
+    let second = Device {
+        id: "alias".into(),
+        name: "Second alias".into(),
+        report_id: 0,
+        report_length: 2,
+        ..first.clone()
+    };
 
-    core.send_report(&device(selected), &[1, 2]).unwrap();
+    core.send_report(&first, &[1, 2]).unwrap();
+    core.send_report(&second, &[1, 2]).unwrap();
 
     assert_eq!(
         core.io.operations,
@@ -197,6 +209,8 @@ fn unique_selector_opens_and_writes_one_complete_framed_report() {
             Operation::Enumerate,
             Operation::Open(9),
             Operation::Write(9, vec![7, 1, 2, 0, 0]),
+            Operation::Open(9),
+            Operation::Write(9, vec![0, 1, 2]),
         ]
     );
 }
@@ -278,6 +292,39 @@ fn cache_miss_recovers_newly_attached_interface_after_cooldown() {
             Operation::Enumerate,
             Operation::Open(8),
             Operation::Write(8, vec![7, 1, 0, 0, 0]),
+        ]
+    );
+}
+
+#[test]
+fn resolution_refresh_consumes_the_recovery_budget_before_opening() {
+    let selected = selector(1);
+    let clock = FakeClock::new();
+    let mut io = FakeIo::new([vec![], vec![observed(selected, 8, "Attached")]]);
+    io.opens
+        .push_back(Err("cannot open refreshed locator".into()));
+    let mut core = HidCore::new(io, clock.clone());
+    core.refresh();
+    clock.advance(IMPLICIT_REFRESH_COOLDOWN);
+
+    assert_eq!(
+        core.send_report(&device(selected), &[1]),
+        Err(HidError::Open {
+            selector: selected,
+            message: "cannot open refreshed locator".into(),
+        })
+    );
+    assert_eq!(core.inventory().revision, 2);
+    assert_eq!(
+        core.send_report(&device(selected), &[2]),
+        Err(HidError::ResolutionInvalidated { selector: selected })
+    );
+    assert_eq!(
+        core.io.operations,
+        [
+            Operation::Enumerate,
+            Operation::Enumerate,
+            Operation::Open(8)
         ]
     );
 }
@@ -378,92 +425,118 @@ fn refreshed_open_failure_is_not_retried_again() {
             Operation::Open(2),
         ]
     );
-    assert!(!core.locators.contains_key(&selected));
+    assert_eq!(
+        core.resolve(selected),
+        Err(HidError::ResolutionInvalidated { selector: selected })
+    );
 }
 
 #[test]
-fn write_error_is_not_retried_and_invalidates_resolution() {
+fn write_errors_and_short_writes_invalidate_without_retrying_io() {
     let selected = selector(1);
-    let mut core = core([vec![observed(selected, 1, "Device")]]);
-    core.io.writes.push_back(Err("driver failed".into()));
-    core.refresh();
+    for (write_result, expected) in [
+        (
+            Err("driver failed".into()),
+            HidError::Write {
+                selector: selected,
+                message: "driver failed".into(),
+            },
+        ),
+        (
+            Ok(2),
+            HidError::ShortWrite {
+                selector: selected,
+                expected: 5,
+                actual: 2,
+            },
+        ),
+    ] {
+        let mut core = core([vec![observed(selected, 1, "Device")]]);
+        core.io.writes.push_back(write_result);
+        core.refresh();
 
+        assert_eq!(core.send_report(&device(selected), &[1]), Err(expected));
+        assert_eq!(
+            core.send_report(&device(selected), &[1]),
+            Err(HidError::ResolutionInvalidated { selector: selected })
+        );
+        assert_eq!(
+            core.io.operations,
+            [
+                Operation::Enumerate,
+                Operation::Open(1),
+                Operation::Write(1, vec![7, 1, 0, 0, 0]),
+            ]
+        );
+    }
+}
+
+#[test]
+fn failed_refresh_retains_rows_but_revokes_valid_and_invalidated_resolutions_until_recovery() {
+    let selected = selector(1);
+    let other = selector(10);
+    let clock = FakeClock::new();
+    let mut io = FakeIo::new([]);
+    io.enumerations = VecDeque::from([
+        Ok(vec![
+            observed(selected, 1, "Original"),
+            observed(other, 3, "Still valid"),
+        ]),
+        Err(HidError::Enumeration {
+            message: "scan failed".into(),
+        }),
+        Ok(vec![observed(selected, 2, "Recovered")]),
+    ]);
+    io.writes.push_back(Err("write failed".into()));
+    let mut core = HidCore::new(io, clock.clone());
+    let ready = core.refresh();
+    assert_eq!(ready.revision, 1);
+    assert_eq!(core.resolve(other), Ok(3));
     assert!(matches!(
         core.send_report(&device(selected), &[1]),
         Err(HidError::Write { .. })
     ));
     assert_eq!(
-        core.io
-            .operations
-            .iter()
-            .filter(|operation| matches!(operation, Operation::Write(..)))
-            .count(),
-        1
+        core.send_report(&device(selected), &[2]),
+        Err(HidError::ResolutionInvalidated { selector: selected })
     );
-    assert!(!core.locators.contains_key(&selected));
-    assert!(matches!(
-        core.send_report(&device(selected), &[1]),
-        Err(HidError::ResolutionInvalidated { .. })
-    ));
-    assert_eq!(
-        core.io
-            .operations
-            .iter()
-            .filter(|operation| matches!(operation, Operation::Enumerate))
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn short_write_is_not_retried_and_invalidates_resolution() {
-    let selected = selector(1);
-    let mut core = core([vec![observed(selected, 1, "Device")]]);
-    core.io.writes.push_back(Ok(2));
-    core.refresh();
-
-    let error = core.send_report(&device(selected), &[1]).unwrap_err();
-
-    assert_eq!(
-        error,
-        HidError::ShortWrite {
-            selector: selected,
-            expected: 5,
-            actual: 2,
-        }
-    );
-    assert_eq!(
-        core.io
-            .operations
-            .iter()
-            .filter(|operation| matches!(operation, Operation::Write(..)))
-            .count(),
-        1
-    );
-    assert!(!core.locators.contains_key(&selected));
-}
-
-#[test]
-fn failed_refresh_retains_stale_rows_but_clears_locators_and_presence() {
-    let selected = selector(1);
-    let mut io = FakeIo::new([vec![observed(selected, 1, "Device")]]);
-    io.enumerations.push_back(Err(HidError::Enumeration {
-        message: "unavailable".into(),
-    }));
-    let mut core = HidCore::new(io, FakeClock::new());
-    let ready = core.refresh();
 
     let failed = core.refresh();
-
-    assert_eq!(ready.revision, 1);
-    assert_eq!(failed.revision, 2);
     assert_eq!(failed.rows, ready.rows);
+    assert_eq!(failed.revision, 2);
     assert!(matches!(
         failed.refresh_state,
         HidRefreshState::Failed { .. }
     ));
-    assert_eq!(failed.presence(&device(selected)), HidPresence::Unknown);
-    assert!(core.locators.is_empty());
+    for selector in [selected, other] {
+        assert_eq!(failed.presence(&device(selector)), HidPresence::Unknown);
+        assert_eq!(
+            core.send_report(&device(selector), &[3]),
+            Err(HidError::Enumeration {
+                message: "scan failed".into()
+            })
+        );
+    }
+
+    clock.advance(IMPLICIT_REFRESH_COOLDOWN);
+    core.send_report(&device(selected), &[4]).unwrap();
+    assert_eq!(core.inventory().revision, 3);
+    assert_eq!(
+        core.inventory().presence(&device(selected)),
+        HidPresence::Connected
+    );
+    assert_eq!(
+        core.io.operations,
+        [
+            Operation::Enumerate,
+            Operation::Open(1),
+            Operation::Write(1, vec![7, 1, 0, 0, 0]),
+            Operation::Enumerate,
+            Operation::Enumerate,
+            Operation::Open(2),
+            Operation::Write(2, vec![7, 4, 0, 0, 0]),
+        ]
+    );
 }
 
 #[test]

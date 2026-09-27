@@ -77,9 +77,9 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
                         let devices = action.device_ids.iter().filter_map(|device_id| config.devices.iter().find(|device| device.id == *device_id).cloned()).collect();
                         test_in_flight.set(true);
                         let runtime = runtime.clone();
-                        let action = action.clone();
+                        let report = action.report.clone();
                         spawn(async move {
-                            let feedback = match runtime.test_action(action, devices).await {
+                            let feedback = match runtime.test_report(report, devices).await {
                                 Ok(result) => test_feedback(result),
                                 Err(error) => (false, error.to_string()),
                             };

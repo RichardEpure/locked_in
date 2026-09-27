@@ -5,12 +5,10 @@ use std::{
 
 use tokio::sync::{mpsc, watch};
 
-use super::{
-    BoundaryClaim, RuntimeCommand, RuntimeInputs, RuntimeRequestError, Shared, TestDispatchResult,
-};
+use super::{BoundaryClaim, RuntimeCommand, RuntimeInputs, Shared, TestDispatchResult};
 use crate::{
     app_log,
-    config::{CompiledConfig, Device, PublishedConfig, SendAction},
+    config::{CompiledConfig, Device, PublishedConfig},
     event::Event,
     hid::{HidBackend, HidError, HidInventory, HidRefreshState},
 };
@@ -75,12 +73,11 @@ impl AutomationWorker {
         self.refresh_hid();
         self.shared.health.startup_finished();
 
-        let mut commands_open = true;
         let mut staged_command = None;
         loop {
             #[cfg(test)]
-            if self.inputs.has_pending() {
-                self.shared.wait_before_event_boundary_claim();
+            if self.inputs.has_pending() || staged_command.is_some() {
+                self.shared.wait_before_boundary_claim();
             }
             match self.shared.claim_boundary(
                 &mut self.inputs,
@@ -107,15 +104,6 @@ impl AutomationWorker {
                 BoundaryClaim::Wait => {}
             }
 
-            match self.commands.try_recv() {
-                Ok(command) => {
-                    staged_command = Some(command);
-                    continue;
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => commands_open = false,
-                Err(mpsc::error::TryRecvError::Empty) => {}
-            }
-
             tokio::select! {
                 biased;
                 changed = self.shutdown.changed() => {
@@ -126,11 +114,10 @@ impl AutomationWorker {
                         self.shared.health.source_changed(source, state);
                     }
                 }
-                command = self.commands.recv(), if commands_open => {
-                    match command {
-                        Some(command) => staged_command = Some(command),
-                        None => commands_open = false,
-                    }
+                command = self.commands.recv() => {
+                    // Shared retains a sender for the worker's lifetime. Receiving
+                    // only stages work; the next atomic claim decides its priority.
+                    staged_command = Some(command.expect("worker retains a command sender"));
                 }
             }
         }
@@ -139,27 +126,24 @@ impl AutomationWorker {
 
     fn execute_command(&mut self, command: RuntimeCommand) {
         match command {
-            RuntimeCommand::TestAction {
-                action,
+            RuntimeCommand::TestReport {
+                report,
                 devices,
                 response,
             } => {
-                let result = self.dispatch_test(&action, &devices);
-                let _ = response.send(Ok(result));
+                let result = self.dispatch_test_report(&report, &devices);
+                let _ = response.send(result);
             }
             RuntimeCommand::RefreshHid => self.refresh_hid(),
         }
     }
 
     fn cancel_pending_commands(&mut self, staged: Option<RuntimeCommand>) {
-        self.commands.close();
-        if let Some(command) = staged {
-            cancel_command(command);
-        }
-        while let Ok(command) = self.commands.try_recv() {
-            cancel_command(command);
-        }
         self.shared.close_admission();
+        self.commands.close();
+        // Dropping response senders cancels accepted tests before Stopped is published.
+        drop(staged);
+        while self.commands.try_recv().is_ok() {}
     }
 
     fn refresh_hid(&mut self) {
@@ -244,13 +228,13 @@ impl AutomationWorker {
         }
     }
 
-    fn dispatch_test(&mut self, action: &SendAction, devices: &[Device]) -> TestDispatchResult {
+    fn dispatch_test_report(&mut self, report: &[u8], devices: &[Device]) -> TestDispatchResult {
         let mut result = TestDispatchResult {
             sent: 0,
             failures: Vec::new(),
         };
         for device in devices {
-            match self.send_report(device, &action.report) {
+            match self.send_report(device, report) {
                 Ok(()) => result.sent += 1,
                 Err(error) => result.failures.push(format!("{}: {error}", device.name)),
             }
@@ -263,11 +247,5 @@ impl AutomationWorker {
             self.shared.health.dispatch_completed(last_error);
         }
         result
-    }
-}
-
-fn cancel_command(command: RuntimeCommand) {
-    if let RuntimeCommand::TestAction { response, .. } = command {
-        let _ = response.send(Err(RuntimeRequestError::Cancelled));
     }
 }
