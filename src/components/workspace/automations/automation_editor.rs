@@ -4,9 +4,8 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{AppWindow, Plus};
 
 use crate::{
-    CAPTURE_ARMED_SIGNAL, CAPTURE_GENERATION_SIGNAL, CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL,
-    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, cancel_capture,
-    components::PublishedConfigContext,
+    DIRTY_EDITOR_SIGNAL,
+    components::{PublishedConfigContext, capture},
     config::{Automation, ConfigCoordinator},
 };
 
@@ -14,13 +13,11 @@ use super::{
     INVALID_REPORT_IDS,
     action_editor::ActionEditor,
     case_editor::CaseEditor,
+    draft::AutomationDraft,
     mutations::{
         add_action, add_case, insert_captured_matcher, matcher_group_name, reveal_last_matcher,
     },
-    publication::{
-        AutomationCommitError, cancel_automation, delete_automation, duplicate_automation,
-        save_automation,
-    },
+    publication::{AutomationCommitError, duplicate_automation},
 };
 
 #[derive(Props, Clone, PartialEq)]
@@ -46,7 +43,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         .as_ref()
         .filter(|automation| automation.id == id)
         .cloned();
-    let is_new = local_draft.is_some();
+    let initial_is_new = local_draft.is_some();
     let original = local_draft
         .or_else(|| {
             published
@@ -60,16 +57,19 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             id: id.clone(),
             ..Automation::default()
         });
-    let mut draft = use_signal(|| original.clone());
-    let initial_revision = published.revision();
-    let mut base = use_signal(|| original.clone());
-    let mut base_revision = use_signal(move || initial_revision);
-    let mut expected_revision = use_signal(move || initial_revision);
+    let mut draft = use_signal(|| {
+        if initial_is_new {
+            AutomationDraft::create(published.revision(), original)
+        } else {
+            AutomationDraft::edit(published.revision(), original)
+        }
+    });
     let mut message = use_signal(|| None::<(bool, String)>);
     let mut collapsed_matcher_groups = use_signal(HashSet::<(String, bool)>::new);
-    let snapshot = draft();
+    let snapshot = draft.read().edited.clone();
     let editor_token = format!("automation:{id}");
-    let dirty = snapshot != base() || is_new;
+    let dirty = draft.read().is_dirty();
+    let capture_notice = capture::session().cancellation_message();
     let invalid_report_ids = INVALID_REPORT_IDS.read();
     let has_invalid_report = snapshot
         .cases
@@ -79,27 +79,38 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         .any(|action| invalid_report_ids.contains(&action.id));
     let capture_automation_id = id.clone();
     use_effect(move || {
-        let generation = *CAPTURE_GENERATION_SIGNAL.read();
-        let Some(target) = CAPTURE_TARGET_SIGNAL.read().clone() else {
+        let session = capture::session();
+        let Some(target) = session
+            .target()
+            .filter(|target| target.automation_id == capture_automation_id)
+            .cloned()
+        else {
             return;
         };
-        let Some(captured) = CAPTURED_WINDOW_SIGNAL.read().clone() else {
-            return;
-        };
-        if target.automation_id != capture_automation_id
-            || !captured.belongs_to(generation, &Some(target.clone()))
+        if !draft
+            .read()
+            .edited
+            .cases
+            .iter()
+            .any(|case| case.id == target.case_id)
         {
+            capture::target_removed(session.generation());
             return;
         }
+        if session.captured().is_none() {
+            return;
+        }
+        let Some(window) = capture::take_targeted(session.generation(), &target) else {
+            return;
+        };
         let mut automation = draft.write();
         let Some((case_name, case_index)) = insert_captured_matcher(
-            &mut automation,
+            &mut automation.edited,
             &target.case_id,
             target.exception,
-            &captured.window,
+            &window,
         ) else {
             drop(automation);
-            cancel_capture();
             message.set(Some((
                 false,
                 "Capture cancelled because the target case no longer exists".into(),
@@ -111,7 +122,6 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             .write()
             .remove(&(target.case_id, target.exception));
         reveal_last_matcher(case_index, target.exception);
-        cancel_capture();
         message.set(Some((
             true,
             format!(
@@ -120,37 +130,19 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             ),
         )));
     });
-    let sync_id = id.clone();
     use_effect(move || {
         let published = publication.required();
-        let pending = pending_draft
-            .read()
-            .as_ref()
-            .is_some_and(|automation| automation.id == sync_id);
-        let base_snapshot = base();
-        let draft_snapshot = draft();
-        let Some(durable) = clean_editor_publication(
-            published.revision(),
-            &published.editable().automations,
-            &sync_id,
-            pending,
-            base_revision(),
-            &base_snapshot,
-            &draft_snapshot,
-        ) else {
-            return;
-        };
-        base.set(durable.clone());
-        draft.set(durable);
-        base_revision.set(published.revision());
-        expected_revision.set(published.revision());
+        let mut refreshed = draft();
+        if refreshed.refresh_if_clean(&published) {
+            draft.set(refreshed);
+        }
     });
     let feedback_automation_id = id.clone();
     use_effect(move || {
-        if *CAPTURE_ARMED_SIGNAL.read()
-            && CAPTURE_TARGET_SIGNAL
-                .read()
-                .as_ref()
+        let session = capture::session();
+        if session.is_armed()
+            && session
+                .target()
                 .is_some_and(|target| target.automation_id == feedback_automation_id)
         {
             message.set(None);
@@ -158,8 +150,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     });
     let effect_token = editor_token.clone();
     use_effect(move || {
-        let pending = UNSAVED_ENTITY_SIGNAL.read().as_deref() == Some(effect_token.as_str());
-        if draft() != base() || pending {
+        if draft.read().is_dirty() {
             *DIRTY_EDITOR_SIGNAL.write() = Some(effect_token.clone());
         } else if DIRTY_EDITOR_SIGNAL.read().as_deref() == Some(effect_token.as_str()) {
             *DIRTY_EDITOR_SIGNAL.write() = None;
@@ -171,15 +162,25 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         if DIRTY_EDITOR_SIGNAL.read().as_deref() == Some(cleanup_token.as_str()) {
             *DIRTY_EDITOR_SIGNAL.write() = None;
         }
-        if CAPTURE_TARGET_SIGNAL
-            .read()
-            .as_ref()
+        let session = capture::session();
+        if session
+            .target()
             .is_some_and(|target| target.automation_id == cleanup_id)
         {
-            cancel_capture();
+            if !draft.peek().is_new()
+                && !publication
+                    .required()
+                    .editable()
+                    .automations
+                    .iter()
+                    .any(|automation| automation.id == cleanup_id)
+            {
+                capture::target_removed(session.generation());
+            } else {
+                capture::cancel(session.generation());
+            }
         }
     });
-    let cancel_id = id.clone();
     let duplicate_publication = publication;
     let delete_coordinator = coordinator.clone();
     let cancel_coordinator = coordinator.clone();
@@ -198,11 +199,10 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     class: "button ghost",
                     disabled: dirty,
                     onclick: move |_| {
-                        let copy = duplicate_automation(&duplicate_publication.required(), &draft());
+                        let copy = duplicate_automation(&duplicate_publication.required(), &draft.read().edited);
                         let copy_id = copy.id.clone();
                         pending_draft.set(Some(copy));
                         let token = format!("automation:{copy_id}");
-                        *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
                         *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                         selected.set(Some(copy_id));
                     },
@@ -214,25 +214,17 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                         let id = props.id.clone();
                         move |_| {
                             if pending_delete().as_deref() == Some(&id) {
-                                if is_new {
-                                    pending_draft.set(None);
-                                    *DIRTY_EDITOR_SIGNAL.write() = None;
-                                    *UNSAVED_ENTITY_SIGNAL.write() = None;
-                                    pending_delete.set(None);
-                                    selected.set(None);
-                                    return;
-                                }
-                                match delete_automation(&delete_coordinator, expected_revision(), &id) {
+                                let result = draft.write().delete(&delete_coordinator);
+                                match result {
                                     Ok(published) => {
-                                        expected_revision.set(published.revision());
-                                        publication.acknowledge(published);
+                                        if let Some(published) = published { publication.acknowledge(published); }
+                                        pending_draft.set(None);
                                         *DIRTY_EDITOR_SIGNAL.write() = None;
-                                        *UNSAVED_ENTITY_SIGNAL.write() = None;
                                         pending_delete.set(None);
                                         selected.set(None);
                                     }
                                     Err(error) => {
-                                        message.set(Some((false, commit_error("Delete", &error, &mut expected_revision))));
+                                        message.set(Some((false, commit_error("Delete", &error))));
                                     }
                                 }
                             } else {
@@ -249,10 +241,10 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
             class: "editor-scroll",
             section { class: "editor-card overview-card",
                 div { class: "section-heading split", span { class: "step", "01" } div { h3 { "Automation" } p { "Name this automation and choose when it is active" } }
-                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().enabled = event.checked() } }
+                    label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().edited.enabled = event.checked() } }
                 }
                 div { class: "form-grid two",
-                    label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().name = event.value() } }
+                    label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().edited.name = event.value() } }
                 }
             }
             section { class: "editor-card trigger-card",
@@ -282,23 +274,20 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         }
         footer { class: "save-bar",
             div { class: "save-bar__status",
+                if let Some(text) = capture_notice { span { class: "message error", role: "status", aria_live: "polite", "{text}" } }
                 if has_invalid_report { span { class: "message error", role: "status", aria_live: "polite", "Complete or correct every hexadecimal report before saving" } }
                 if let Some((success, text)) = message() { span { class: if success { "message success" } else { "message error" }, role: "status", aria_live: "polite", "{text}" } }
             }
             div { class: "toolbar",
                 button { class: "button ghost", disabled: !dirty, onclick: move |_| {
                     let current = cancel_coordinator.current();
-                    if let Some(durable) = cancel_automation(&current, &cancel_id, is_new) {
-                        base.set(durable.clone());
-                        draft.set(durable);
-                        base_revision.set(current.revision());
-                        expected_revision.set(current.revision());
+                    let restored = draft.write().cancel(&current);
+                    if restored {
                         publication.acknowledge(current);
                         *DIRTY_EDITOR_SIGNAL.write() = None;
                         message.set(None);
                     } else {
                         pending_draft.set(None);
-                        *UNSAVED_ENTITY_SIGNAL.write() = None;
                         *DIRTY_EDITOR_SIGNAL.write() = None;
                         selected.set(None);
                     }
@@ -307,22 +296,15 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     class: "button primary",
                     disabled: !dirty || has_invalid_report,
                     onclick: move |_| {
-                        let draft_snapshot = draft();
-                        match save_automation(&save_coordinator, expected_revision(), &draft_snapshot, is_new) {
+                        let result = draft.write().save(&save_coordinator);
+                        match result {
                             Ok(published) => {
-                                expected_revision.set(published.revision());
-                                if let Some(saved) = published.editable().automations.iter().find(|automation| automation.id == props.id).cloned() {
-                                    base.set(saved.clone());
-                                    draft.set(saved);
-                                }
-                                base_revision.set(published.revision());
                                 publication.acknowledge(published);
                                 pending_draft.set(None);
-                                *UNSAVED_ENTITY_SIGNAL.write() = None;
                                 *DIRTY_EDITOR_SIGNAL.write() = None;
                                 message.set(Some((true, "Automation saved".into())));
                             }
-                            Err(error) => message.set(Some((false, commit_error("Save", &error, &mut expected_revision)))),
+                            Err(error) => message.set(Some((false, commit_error("Save", &error)))),
                         }
                     },
                     "Save automation"
@@ -332,37 +314,11 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     }
 }
 
-fn clean_editor_publication(
-    published_revision: u64,
-    published_automations: &[Automation],
-    automation_id: &str,
-    is_new: bool,
-    base_revision: u64,
-    base: &Automation,
-    draft: &Automation,
-) -> Option<Automation> {
-    if is_new || published_revision == base_revision || draft != base {
-        return None;
-    }
-    published_automations
-        .iter()
-        .find(|automation| automation.id == automation_id)
-        .cloned()
-}
-
-fn commit_error(
-    operation: &str,
-    error: &AutomationCommitError,
-    expected_revision: &mut Signal<u64>,
-) -> String {
-    if let Some(actual) = error.stale_actual_revision() {
-        expected_revision.set(actual);
+fn commit_error(operation: &str, error: &AutomationCommitError) -> String {
+    if error.stale_actual_revision().is_some() {
         return format!(
             "{operation} failed because the configuration changed. Your draft is preserved; review it and save again, or cancel to restore the published version"
         );
     }
     format!("{operation} failed; your draft is preserved: {error}")
 }
-
-#[cfg(test)]
-mod tests;

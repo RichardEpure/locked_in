@@ -94,17 +94,14 @@ impl ObservationState {
 struct ForegroundPublisher {
     state: Mutex<ObservationState>,
     observations: watch::Sender<ForegroundObservation>,
-    metadata: watch::Sender<FocusedWindow>,
 }
 
 impl ForegroundPublisher {
     fn new() -> Self {
         let (observations, _) = watch::channel(ForegroundObservation::default());
-        let (metadata, _) = watch::channel(FocusedWindow::default());
         Self {
             state: Mutex::new(ObservationState::default()),
             observations,
-            metadata,
         }
     }
 
@@ -132,22 +129,11 @@ impl ForegroundPublisher {
         ticket: ObservationTicket,
         window: FocusedWindow,
     ) -> Option<ForegroundObservation> {
-        self.complete_before_versioned(ticket, window, || {})
-    }
-
-    fn complete_before_versioned(
-        &self,
-        ticket: ObservationTicket,
-        window: FocusedWindow,
-        before_versioned: impl FnOnce(),
-    ) -> Option<ForegroundObservation> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let observation = state.complete(ticket, window)?;
-        self.metadata.send_replace(observation.window.clone());
-        before_versioned();
         self.observations.send_replace(observation.clone());
         Some(observation)
     }
@@ -156,12 +142,8 @@ impl ForegroundPublisher {
         self.observations.subscribe()
     }
 
-    fn subscribe_metadata(&self) -> watch::Receiver<FocusedWindow> {
-        self.metadata.subscribe()
-    }
-
     fn metadata(&self) -> FocusedWindow {
-        self.metadata.borrow().clone()
+        self.observations.borrow().window.clone()
     }
 }
 
@@ -170,10 +152,6 @@ static FOREGROUND_PUBLISHER: LazyLock<ForegroundPublisher> =
 
 pub fn subscribe_foreground_observations() -> watch::Receiver<ForegroundObservation> {
     FOREGROUND_PUBLISHER.subscribe_observations()
-}
-
-pub fn subscribe_focused_window() -> watch::Receiver<FocusedWindow> {
-    FOREGROUND_PUBLISHER.subscribe_metadata()
 }
 
 pub struct WinHook {

@@ -1,24 +1,21 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::X;
 
-use crate::{
-    CAPTURE_GENERATION_SIGNAL, CAPTURED_WINDOW_SIGNAL, DIRTY_EDITOR_SIGNAL, cancel_capture,
-};
+use crate::{DIRTY_EDITOR_SIGNAL, components::capture};
 
 use super::automations::commit_captured_matcher;
 use crate::{components::PublishedConfigContext, config::ConfigCoordinator};
 use std::sync::Arc;
 
 #[component]
-pub(super) fn CaptureDialog() -> Element {
+pub(super) fn CaptureDialog(generation: u64) -> Element {
     let coordinator = consume_context::<Option<Arc<ConfigCoordinator>>>()
         .expect("configuration coordinator is available after bootstrap");
     let publication = consume_context::<PublishedConfigContext>();
-    let generation = *CAPTURE_GENERATION_SIGNAL.read();
-    let captured = CAPTURED_WINDOW_SIGNAL
-        .read()
-        .as_ref()
-        .filter(|captured| captured.belongs_to(generation, &None))
+    let session = capture::session();
+    let captured = session
+        .captured()
+        .filter(|captured| session.generation() == generation && captured.target.is_none())
         .map(|captured| captured.window.clone())
         .unwrap_or_default();
     let mut automation_id = use_signal(String::new);
@@ -45,7 +42,7 @@ pub(super) fn CaptureDialog() -> Element {
         div { class: "modal-backdrop",
             section { class: "capture-dialog",
                 header { div { div { class: "eyebrow", "CAPTURED WINDOW" } h2 { "Assign matcher" } p { "Review the captured metadata, then choose an automation case." } }
-                    button { class: "icon-button", aria_label: "Close", onclick: move |_| cancel_capture(), X { size: 16, "aria-hidden": "true" } }
+                    button { class: "icon-button", aria_label: "Close", onclick: move |_| capture::cancel(generation), X { size: 16, "aria-hidden": "true" } }
                 }
                 div { class: "capture-metadata",
                     div { span { "Title" } code { "{title}" } }
@@ -65,18 +62,20 @@ pub(super) fn CaptureDialog() -> Element {
                 label { class: "exception-toggle", input { type: "checkbox", checked: exception(), onchange: move |event| exception.set(event.checked()) } "Add as an exception matcher" }
                 if !message().is_empty() { p { class: "message error", "{message}" } }
                 footer { class: "toolbar modal-actions",
-                    button { class: "button ghost", onclick: move |_| cancel_capture(), "Cancel" }
+                    button { class: "button ghost", onclick: move |_| capture::cancel(generation), "Cancel" }
                     button { class: "button primary", disabled: automation_id().is_empty() || case_id().is_empty(), onclick: move |_| {
+                        let session = capture::session();
+                        let Some(captured) = session.captured().filter(|captured| session.generation() == generation && captured.target.is_none()) else { return; };
                         let target_automation_id = automation_id();
                         if DIRTY_EDITOR_SIGNAL.read().is_some() {
                             message.set("Save or cancel the open draft, or use Capture next inside that editor".into());
                             return;
                         }
                         let expected_revision = publication.required().revision();
-                        match commit_captured_matcher(&coordinator, expected_revision, &target_automation_id, &case_id(), exception(), &captured) {
+                        match commit_captured_matcher(&coordinator, expected_revision, &target_automation_id, &case_id(), exception(), &captured.window) {
                             Ok(published) => {
                                 publication.acknowledge(published);
-                                cancel_capture();
+                                capture::cancel(generation);
                             }
                             Err(error) => message.set(format!("Could not save matcher; your capture and selections are preserved: {error}")),
                         }

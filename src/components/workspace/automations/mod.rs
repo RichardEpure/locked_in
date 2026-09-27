@@ -7,6 +7,7 @@ mod automation_editor;
 mod automations_view;
 mod case_editor;
 mod condition_row;
+mod draft;
 mod matcher_editor;
 mod matcher_group;
 mod mutations;

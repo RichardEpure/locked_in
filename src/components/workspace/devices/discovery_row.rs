@@ -1,23 +1,18 @@
-use std::sync::Arc;
-
 use dioxus::prelude::*;
 
 use crate::{
-    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
-    config::{Device, EditableConfig},
+    config::Device,
     hid::{HidInventoryRow, HidRefreshState, InterfaceSelector},
 };
 
-use super::draft::DeviceDraft;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SelectorAliases {
+pub(super) enum SelectorAliases {
     None,
     One(String),
     Multiple(usize),
 }
 
-fn selector_aliases(devices: &[Device], selector: InterfaceSelector) -> SelectorAliases {
+pub(super) fn selector_aliases(devices: &[Device], selector: InterfaceSelector) -> SelectorAliases {
     let matches = devices
         .iter()
         .filter(|device| InterfaceSelector::from(*device) == selector)
@@ -28,6 +23,12 @@ fn selector_aliases(devices: &[Device], selector: InterfaceSelector) -> Selector
         [id] => SelectorAliases::One(id.clone()),
         aliases => SelectorAliases::Multiple(aliases.len()),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DiscoveryIntent {
+    Adopt(InterfaceSelector),
+    OpenSaved(InterfaceSelector),
 }
 
 fn format_selector(selector: InterfaceSelector) -> String {
@@ -41,19 +42,15 @@ fn format_selector(selector: InterfaceSelector) -> String {
 pub(super) struct DiscoveryRowProps {
     pub row: HidInventoryRow,
     pub refresh_state: HidRefreshState,
-    pub selected: Signal<Option<String>>,
-    pub query: Signal<String>,
-    pub discovery_open: Signal<bool>,
     pub navigation_locked: bool,
-    pub config: Arc<EditableConfig>,
-    pub revision: u64,
-    pub pending_draft: Signal<Option<DeviceDraft>>,
+    pub aliases: SelectorAliases,
+    pub on_intent: EventHandler<DiscoveryIntent>,
 }
 
 #[component]
 pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
     let row = props.row;
-    let aliases = selector_aliases(&props.config.devices, row.selector);
+    let aliases = props.aliases;
     let available = props.refresh_state == HidRefreshState::Ready && row.match_count == 1;
     let (row_class, state_class, state_text, state_title) = match &props.refresh_state {
         HidRefreshState::Ready if row.match_count == 1 => (
@@ -105,52 +102,15 @@ pub(super) fn DiscoveryRow(props: DiscoveryRowProps) -> Element {
                             button {
                                 class: "button secondary small",
                                 disabled: props.navigation_locked,
-                                onclick: {
-                                    let row = row.clone();
-                                    let mut selected = props.selected;
-                                    let mut query = props.query;
-                                    let mut discovery_open = props.discovery_open;
-                                    let mut pending_draft = props.pending_draft;
-                                    let config = props.config.clone();
-                                    let revision = props.revision;
-                                    move |_| {
-                                        let id = config.next_id(&row.name);
-                                        let device = Device {
-                                            id: id.clone(),
-                                            name: row.name.clone(),
-                                            vid: row.selector.vendor_id,
-                                            pid: row.selector.product_id,
-                                            usage_page: row.selector.usage_page,
-                                            usage: row.selector.usage,
-                                            report_length: 32,
-                                            report_id: 0,
-                                        };
-                                        pending_draft.set(Some(DeviceDraft::create(revision, device)));
-                                        let token = format!("device:{id}");
-                                        *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
-                                        *DIRTY_EDITOR_SIGNAL.write() = Some(token);
-                                        selected.set(Some(id));
-                                        query.set(String::new());
-                                        discovery_open.set(false);
-                                    }
-                                },
+                                onclick: move |_| props.on_intent.call(DiscoveryIntent::Adopt(row.selector)),
                                 "Add"
                             }
                         },
-                        SelectorAliases::One(id) => rsx! {
+                        SelectorAliases::One(_) => rsx! {
                             button {
                                 class: "button secondary small",
                                 disabled: props.navigation_locked,
-                                onclick: {
-                                    let mut selected = props.selected;
-                                    let mut query = props.query;
-                                    let mut discovery_open = props.discovery_open;
-                                    move |_| {
-                                        selected.set(Some(id.clone()));
-                                        query.set(String::new());
-                                        discovery_open.set(false);
-                                    }
-                                },
+                                onclick: move |_| props.on_intent.call(DiscoveryIntent::OpenSaved(row.selector)),
                                 "Open saved"
                             }
                         },

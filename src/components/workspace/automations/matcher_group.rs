@@ -4,18 +4,19 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{ChevronDown, ChevronRight, Plus};
 
 use crate::{
-    CAPTURE_ARMED_SIGNAL, CAPTURE_TARGET_SIGNAL, CaptureTarget, arm_capture, cancel_capture,
-    config::{Automation, WindowMatcher},
+    components::capture::{self, CaptureTarget},
+    config::WindowMatcher,
 };
 
 use super::{
+    draft::AutomationDraft,
     matcher_editor::MatcherEditor,
     mutations::{add_matcher, matcher_group_body_id, reveal_last_matcher},
 };
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct MatcherGroupProps {
-    draft: Signal<Automation>,
+    draft: Signal<AutomationDraft>,
     collapsed_matcher_groups: Signal<HashSet<(String, bool)>>,
     case_index: usize,
     case_id: String,
@@ -45,11 +46,12 @@ pub(super) fn MatcherGroup(props: MatcherGroupProps) -> Element {
     let body_id = matcher_group_body_id(case_index, exceptions);
     let capture_case_id = props.case_id.clone();
     let add_case_id = props.case_id.clone();
-    let capture_target = CAPTURE_TARGET_SIGNAL.read().clone();
-    let capture_armed = *CAPTURE_ARMED_SIGNAL.read()
-        && capture_target.as_ref().is_some_and(|target| {
+    let session = capture::session();
+    let generation = session.generation();
+    let capture_armed = session.is_armed()
+        && session.target().is_some_and(|target| {
             let automation = draft.read();
-            target.automation_id == automation.id
+            target.automation_id == automation.edited.id
                 && target.case_id == props.case_id
                 && target.exception == exceptions
         });
@@ -79,7 +81,7 @@ pub(super) fn MatcherGroup(props: MatcherGroupProps) -> Element {
                     button { class: "button ghost small", onclick: move |_| {
                         collapsed_matcher_groups.write().remove(&(capture_case_id.clone(), exceptions));
                         let automation = draft.read();
-                        arm_capture(Some(CaptureTarget::new(automation.id.clone(), capture_case_id.clone(), exceptions)));
+                        capture::arm(Some(CaptureTarget::new(automation.edited.id.clone(), capture_case_id.clone(), exceptions)));
                     }, if capture_armed { "Waiting for F3" } else { "Capture next (F3)" } }
                     button { class: "button secondary small", onclick: move |_| {
                         collapsed_matcher_groups.write().remove(&(add_case_id.clone(), exceptions));
@@ -91,7 +93,7 @@ pub(super) fn MatcherGroup(props: MatcherGroupProps) -> Element {
             if capture_armed {
                 div { class: "capture-status", role: "status", aria_live: "polite",
                     span { "Capturing for \"{props.case_name}\" -> {title}. Focus another window, then press F3." }
-                    button { class: "button ghost small", onclick: move |_| cancel_capture(), "Cancel" }
+                    button { class: "button ghost small", onclick: move |_| capture::cancel(generation), "Cancel" }
                 }
             }
             div { class: "matcher-group__body", id: "{body_id}", hidden: collapsed,

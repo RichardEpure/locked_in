@@ -2,13 +2,18 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{ChevronDown, ChevronRight, Plus, Search};
 
 use crate::{
-    CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL,
+    DIRTY_EDITOR_SIGNAL,
     automation_runtime::AutomationRuntime,
-    config::Device,
+    components::capture,
+    config::{Device, EditableConfig},
     hid::{HidInventory, HidRefreshState},
 };
 
-use super::{device_editor::DeviceEditor, discovery_row::DiscoveryRow, draft::DeviceDraft};
+use super::{
+    device_editor::DeviceEditor,
+    discovery_row::{DiscoveryIntent, DiscoveryRow, SelectorAliases, selector_aliases},
+    draft::DeviceDraft,
+};
 use crate::components::PublishedConfigContext;
 use crate::components::workspace::{
     empty_state::EmptyState,
@@ -44,7 +49,7 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
     let published = publication_context.required();
     let inventory = inventory_context.current();
     let mut selected = props.selected;
-    let mut pending_draft = use_signal(|| None::<DeviceDraft>);
+    let pending_draft = use_signal(|| None::<DeviceDraft>);
     let mut query = use_signal(String::new);
     let mut discovery_open = use_signal(|| false);
     let queued_revision = use_signal(|| None::<u64>);
@@ -121,9 +126,25 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         }
     };
     let navigation_locked =
-        DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
-    let create_config = published.editable().clone();
-    let create_revision = published.revision();
+        DIRTY_EDITOR_SIGNAL.read().is_some() || capture::session().target().is_some();
+    let on_discovery_intent = move |intent| {
+        let current = publication_context.required();
+        let inventory = inventory_context.current();
+        if DIRTY_EDITOR_SIGNAL.read().is_some() || capture::session().target().is_some() {
+            return;
+        }
+        let Some(selection) =
+            discovery_selection(intent, &inventory, current.editable(), current.revision())
+        else {
+            return;
+        };
+        match selection {
+            DiscoverySelection::Create(draft) => begin_device_draft(draft, pending_draft, selected),
+            DiscoverySelection::Open(id) => selected.set(Some(id)),
+        }
+        query.set(String::new());
+        discovery_open.set(false);
+    };
     use_effect(move || {
         let selected_id = selected();
         let is_open = discovery_open();
@@ -140,15 +161,12 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         aside { class: "entity-list",
             header { div { h1 { "Devices" } p { "HID destinations for report actions" } }
                 button { class: "icon-button primary", aria_label: "New device", disabled: navigation_locked, onclick: move |_| {
-                    let id = create_config.next_id("device");
-                    pending_draft.set(Some(DeviceDraft::create(
-                        create_revision,
+                    let current = publication_context.required();
+                    let id = current.editable().next_id("device");
+                    begin_device_draft(DeviceDraft::create(
+                        current.revision(),
                         Device { id: id.clone(), name: "New device".into(), report_length: 32, ..Device::default() },
-                    )));
-                    let token = format!("device:{id}");
-                    *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
-                    *DIRTY_EDITOR_SIGNAL.write() = Some(token);
-                    selected.set(Some(id));
+                    ), pending_draft, selected);
                 }, Plus { size: 16, "aria-hidden": "true" } }
             }
             div { class: "search-field",
@@ -185,15 +203,11 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
                             for row in inventory.rows.iter().cloned() {
                                 DiscoveryRow {
                                     key: "{row.selector.vendor_id}-{row.selector.product_id}-{row.selector.usage_page}-{row.selector.usage}",
+                                    aliases: selector_aliases(&published.editable().devices, row.selector),
                                     row,
                                     refresh_state: inventory.refresh_state.clone(),
-                                    selected,
-                                    query,
-                                    discovery_open,
                                     navigation_locked,
-                                    config: published.editable().clone(),
-                                    revision: published.revision(),
-                                    pending_draft,
+                                    on_intent: on_discovery_intent,
                                 }
                             }
                         }
@@ -236,3 +250,60 @@ pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> El
         }
     }
 }
+
+fn begin_device_draft(
+    draft: DeviceDraft,
+    mut pending: Signal<Option<DeviceDraft>>,
+    mut selected: Signal<Option<String>>,
+) {
+    let id = draft.edited.id.clone();
+    pending.set(Some(draft));
+    *DIRTY_EDITOR_SIGNAL.write() = Some(format!("device:{id}"));
+    selected.set(Some(id));
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DiscoverySelection {
+    Create(DeviceDraft),
+    Open(String),
+}
+
+fn discovery_selection(
+    intent: DiscoveryIntent,
+    inventory: &HidInventory,
+    config: &EditableConfig,
+    revision: u64,
+) -> Option<DiscoverySelection> {
+    if inventory.refresh_state != HidRefreshState::Ready {
+        return None;
+    }
+    let (DiscoveryIntent::Adopt(selector) | DiscoveryIntent::OpenSaved(selector)) = intent;
+    let row = inventory
+        .rows
+        .iter()
+        .find(|row| row.selector == selector && row.match_count == 1)?;
+    match (intent, selector_aliases(&config.devices, selector)) {
+        (DiscoveryIntent::Adopt(_), SelectorAliases::None) => {
+            Some(DiscoverySelection::Create(DeviceDraft::create(
+                revision,
+                Device {
+                    id: config.next_id(&row.name),
+                    name: row.name.clone(),
+                    vid: selector.vendor_id,
+                    pid: selector.product_id,
+                    usage_page: selector.usage_page,
+                    usage: selector.usage,
+                    report_length: 32,
+                    report_id: 0,
+                },
+            )))
+        }
+        (DiscoveryIntent::OpenSaved(_), SelectorAliases::One(id)) => {
+            Some(DiscoverySelection::Open(id))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

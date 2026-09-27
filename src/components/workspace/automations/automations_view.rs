@@ -1,9 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Plus, Search};
 
-use crate::{
-    CAPTURE_TARGET_SIGNAL, DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, config::Automation,
-};
+use crate::{DIRTY_EDITOR_SIGNAL, components::capture, config::Automation};
 
 use crate::components::workspace::empty_state::EmptyState;
 use crate::components::workspace::selection::SelectionProps;
@@ -27,8 +25,8 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
         automations.push(pending);
     }
     let normalized_query = query().to_lowercase();
-    let navigation_locked =
-        DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
+    let session = capture::session();
+    let navigation_locked = DIRTY_EDITOR_SIGNAL.read().is_some() || session.target().is_some();
 
     rsx! {
         aside {
@@ -45,7 +43,6 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
                         let id = automation.id.clone();
                         pending_draft.set(Some(automation));
                         let token = format!("automation:{id}");
-                        *UNSAVED_ENTITY_SIGNAL.write() = Some(token.clone());
                         *DIRTY_EDITOR_SIGNAL.write() = Some(token);
                         selected.set(Some(id));
                     },
@@ -84,7 +81,7 @@ pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -
             if let Some(id) = selected().filter(|id| automations.iter().any(|automation| automation.id == *id)) {
                 AutomationEditor { key: "{id}", id, selected, pending_delete, pending_draft }
             } else {
-                EmptyState { title: "Select an automation", copy: "Create or select an automation to configure its event, ordered cases, and report routes." }
+                EmptyState { title: "Select an automation", copy: session.cancellation_message().unwrap_or("Create or select an automation to configure its event, ordered cases, and report routes.") }
             }
         }
     }

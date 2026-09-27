@@ -119,8 +119,12 @@ fn focused_window_bridge_projects_the_current_value_before_waiting_for_changes()
         title: Some("already focused".to_string()),
         ..FocusedWindow::default()
     };
-    let (publisher, mut receiver) = tokio::sync::watch::channel(FocusedWindow::default());
-    publisher.send_replace(current.clone());
+    let (publisher, mut receiver) = tokio::sync::watch::channel(ForegroundObservation::default());
+    publisher.send_replace(ForegroundObservation {
+        generation: 2,
+        raw_hwnd: 42,
+        window: current.clone(),
+    });
     let projected = RefCell::new(None);
 
     publish_current_focused_window(&mut receiver, |focused| {

@@ -2,25 +2,33 @@ use std::collections::HashSet;
 
 use dioxus::prelude::*;
 
+use super::draft::AutomationDraft;
 use crate::{
     config::{Automation, AutomationCase, SendAction, TextCondition, WindowMatcher},
     focused_window::FocusedWindow,
 };
 
-pub(super) fn add_case(draft: &mut Signal<Automation>) {
+pub(super) fn add_case(draft: &mut Signal<AutomationDraft>) {
     let snapshot = draft.read();
-    let index = snapshot.cases.len() + 1;
-    let id = next_child_id("case", snapshot.cases.iter().map(|case| case.id.as_str()));
+    let index = snapshot.edited.cases.len() + 1;
+    let id = next_child_id(
+        "case",
+        snapshot.edited.cases.iter().map(|case| case.id.as_str()),
+    );
     drop(snapshot);
-    draft.write().cases.push(AutomationCase {
+    draft.write().edited.cases.push(AutomationCase {
         id,
         name: format!("Case {index}"),
         ..AutomationCase::default()
     });
 }
 
-pub(super) fn add_matcher(draft: &mut Signal<Automation>, case_index: usize, exceptions: bool) {
-    let case = &mut draft.write().cases[case_index];
+pub(super) fn add_matcher(
+    draft: &mut Signal<AutomationDraft>,
+    case_index: usize,
+    exceptions: bool,
+) {
+    let case = &mut draft.write().edited.cases[case_index];
     let id = next_child_id(
         "matcher",
         case.applications
@@ -103,15 +111,16 @@ pub(super) fn reveal_last_matcher(case_index: usize, exceptions: bool) {
     });
 }
 
-pub(super) fn add_action(draft: &mut Signal<Automation>, case_index: Option<usize>) {
+pub(super) fn add_action(draft: &mut Signal<AutomationDraft>, case_index: Option<usize>) {
     let snapshot = draft.read();
     let id = next_child_id(
         "action",
         snapshot
+            .edited
             .cases
             .iter()
             .flat_map(|case| case.actions.iter())
-            .chain(snapshot.otherwise_actions.iter())
+            .chain(snapshot.edited.otherwise_actions.iter())
             .map(|action| action.id.as_str()),
     );
     drop(snapshot);
@@ -120,36 +129,38 @@ pub(super) fn add_action(draft: &mut Signal<Automation>, case_index: Option<usiz
         ..SendAction::default()
     };
     if let Some(index) = case_index {
-        draft.write().cases[index].actions.push(action);
+        draft.write().edited.cases[index].actions.push(action);
     } else {
-        draft.write().otherwise_actions.push(action);
+        draft.write().edited.otherwise_actions.push(action);
     }
 }
 
 pub(super) fn with_action_mut(
-    draft: &mut Signal<Automation>,
+    draft: &mut Signal<AutomationDraft>,
     case_index: Option<usize>,
     action_index: usize,
     update: impl FnOnce(&mut SendAction),
 ) {
     let mut automation = draft.write();
     let action = if let Some(index) = case_index {
-        &mut automation.cases[index].actions[action_index]
+        &mut automation.edited.cases[index].actions[action_index]
     } else {
-        &mut automation.otherwise_actions[action_index]
+        &mut automation.edited.otherwise_actions[action_index]
     };
     update(action);
 }
 
 pub(super) fn remove_action(
-    draft: &mut Signal<Automation>,
+    draft: &mut Signal<AutomationDraft>,
     case_index: Option<usize>,
     action_index: usize,
 ) {
     if let Some(index) = case_index {
-        draft.write().cases[index].actions.remove(action_index);
+        draft.write().edited.cases[index]
+            .actions
+            .remove(action_index);
     } else {
-        draft.write().otherwise_actions.remove(action_index);
+        draft.write().edited.otherwise_actions.remove(action_index);
     }
 }
 

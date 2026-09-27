@@ -1,15 +1,13 @@
 use dioxus::prelude::*;
 
-use crate::{CAPTURE_ARMED_SIGNAL, CAPTURE_GENERATION_SIGNAL, CAPTURE_TARGET_SIGNAL};
-
-use super::armed_capture_shortcut::ArmedCaptureShortcut;
+use super::{armed_capture_shortcut::ArmedCaptureShortcut, capture};
 
 #[component]
 pub(super) fn CaptureShortcut() -> Element {
-    if !*CAPTURE_ARMED_SIGNAL.read() {
+    let session = capture::session();
+    if !session.is_armed() {
         return rsx! {};
     }
-    let generation = *CAPTURE_GENERATION_SIGNAL.read();
-    let target = CAPTURE_TARGET_SIGNAL.read().clone();
-    rsx! { ArmedCaptureShortcut { key: "{generation}", generation, target } }
+    let generation = session.generation();
+    rsx! { ArmedCaptureShortcut { key: "{generation}", generation } }
 }

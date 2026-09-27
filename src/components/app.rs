@@ -14,11 +14,16 @@ use dioxus::{
 };
 
 use crate::{
-    FOCUSED_WINDOW_SIGNAL, app_log, application_lifecycle::ApplicationLifecycle, arm_capture,
-    config::PublishedConfig, focused_window::FocusedWindow, win,
+    FOCUSED_WINDOW_SIGNAL, app_log,
+    application_lifecycle::ApplicationLifecycle,
+    config::PublishedConfig,
+    focused_window::{FocusedWindow, ForegroundObservation},
+    win,
 };
 
-use super::{PublishedConfigContext, capture_shortcut::CaptureShortcut, workspace::Workspace};
+use super::{
+    PublishedConfigContext, capture, capture_shortcut::CaptureShortcut, workspace::Workspace,
+};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/styles/main.css");
@@ -113,7 +118,7 @@ pub(crate) fn App() -> Element {
                 window.set_focus();
             }
             "capture" => {
-                arm_capture(None);
+                capture::arm(None);
                 app_log::write("focused-window capture armed");
             }
             _ => {}
@@ -142,12 +147,12 @@ pub(crate) fn App() -> Element {
     });
 
     use_future(move || async move {
-        let mut receiver = win::subscribe_focused_window();
+        let mut receiver = win::subscribe_foreground_observations();
         publish_current_focused_window(&mut receiver, |focused| {
             *FOCUSED_WINDOW_SIGNAL.write() = focused;
         });
         while receiver.changed().await.is_ok() {
-            *FOCUSED_WINDOW_SIGNAL.write() = receiver.borrow_and_update().clone();
+            *FOCUSED_WINDOW_SIGNAL.write() = receiver.borrow_and_update().window.clone();
         }
     });
 
@@ -190,10 +195,10 @@ pub(super) fn effective_close_behavior(
 }
 
 fn publish_current_focused_window(
-    receiver: &mut tokio::sync::watch::Receiver<FocusedWindow>,
+    receiver: &mut tokio::sync::watch::Receiver<ForegroundObservation>,
     publish: impl FnOnce(FocusedWindow),
 ) {
-    publish(receiver.borrow_and_update().clone());
+    publish(receiver.borrow_and_update().window.clone());
 }
 
 #[cfg(test)]

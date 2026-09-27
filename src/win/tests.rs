@@ -100,11 +100,9 @@ fn consecutive_duplicate_hwnd_is_suppressed_even_if_metadata_changes() {
 fn ignored_alt_tab_host_breaks_duplicate_identity_without_publication() {
     let publisher = ForegroundPublisher::new();
     let mut observations = publisher.subscribe_observations();
-    let mut metadata = publisher.subscribe_metadata();
 
     observe(&publisher, 10, window("A"));
     observations.borrow_and_update();
-    metadata.borrow_and_update();
     assert!(
         observe(
             &publisher,
@@ -117,7 +115,6 @@ fn ignored_alt_tab_host_breaks_duplicate_identity_without_publication() {
         .is_none()
     );
     assert!(!observations.has_changed().unwrap());
-    assert!(!metadata.has_changed().unwrap());
     observe(&publisher, 10, window("A"));
 
     let latest = observations.borrow().clone();
@@ -167,12 +164,11 @@ fn concurrent_startup_and_callback_for_same_hwnd_publish_once() {
 #[test]
 fn accepted_observations_project_metadata_for_existing_consumers() {
     let publisher = ForegroundPublisher::new();
-    let metadata = publisher.subscribe_metadata();
     let facts = window("projected");
 
     observe(&publisher, 10, facts.clone());
 
-    assert_eq!(*metadata.borrow(), facts);
+    assert_eq!(publisher.metadata(), facts);
 }
 
 #[test]
@@ -208,21 +204,19 @@ fn older_startup_completion_cannot_overwrite_a_newer_callback() {
 }
 
 #[test]
-fn metadata_is_published_before_the_versioned_observation() {
+fn current_and_subscribed_observations_keep_identity_and_metadata_together() {
     let publisher = ForegroundPublisher::new();
-    let mut metadata = publisher.subscribe_metadata();
     let mut observations = publisher.subscribe_observations();
     let ticket = publisher.begin(10).unwrap();
     let facts = window("ordered");
 
-    publisher.complete_before_versioned(ticket, facts.clone(), || {
-        assert!(metadata.has_changed().unwrap());
-        assert_eq!(*metadata.borrow_and_update(), facts);
-        assert!(!observations.has_changed().unwrap());
-    });
+    publisher.complete(ticket, facts.clone());
 
     assert!(observations.has_changed().unwrap());
     let published = observations.borrow_and_update().clone();
     assert_eq!(published.generation, 1);
+    assert_eq!(published.raw_hwnd, 10);
     assert_eq!(published.window, facts);
+    assert_eq!(publisher.metadata(), published.window);
+    assert_eq!(*publisher.subscribe_observations().borrow(), published);
 }

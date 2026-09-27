@@ -3,8 +3,9 @@ use std::process::Command;
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Settings, Usb, Workflow};
 
+use super::capture;
 use crate::{
-    CAPTURE_TARGET_SIGNAL, CAPTURED_WINDOW_SIGNAL, ConfigurationLoadError, DIRTY_EDITOR_SIGNAL,
+    ConfigurationLoadError, DIRTY_EDITOR_SIGNAL,
     automation_runtime::{AutomationRuntime, RuntimePhase},
     config,
 };
@@ -94,8 +95,12 @@ pub(super) fn Workspace() -> Element {
     } else {
         format!("{status_text}: {status_detail}")
     };
-    let navigation_locked =
-        DIRTY_EDITOR_SIGNAL.read().is_some() || CAPTURE_TARGET_SIGNAL.read().is_some();
+    let session = capture::session();
+    let navigation_locked = DIRTY_EDITOR_SIGNAL.read().is_some() || session.target().is_some();
+    let capture_generation = session.generation();
+    let show_capture_dialog = session
+        .captured()
+        .is_some_and(|captured| captured.target.is_none());
 
     rsx! {
         div {
@@ -162,10 +167,8 @@ pub(super) fn Workspace() -> Element {
                 Section::Devices => rsx! { DevicesView { selected: selected_device } },
                 Section::Settings => rsx! { SettingsView {} },
             }
-            if CAPTURED_WINDOW_SIGNAL.read().as_ref().is_some_and(|captured|
-                captured.belongs_to(*crate::CAPTURE_GENERATION_SIGNAL.read(), &None)
-            ) && CAPTURE_TARGET_SIGNAL.read().is_none() {
-                CaptureDialog {}
+            if show_capture_dialog {
+                CaptureDialog { key: "{capture_generation}", generation: capture_generation }
             }
         }
     }

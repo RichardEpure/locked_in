@@ -3,18 +3,19 @@ use dioxus_icons::lucide::Trash2;
 
 use crate::{
     automation_runtime::{AutomationRuntime, TestDispatchResult},
-    config::{Automation, Device, PublishedConfig, SendAction},
+    config::{Device, PublishedConfig, SendAction},
 };
 
 use super::{
     INVALID_REPORT_IDS,
+    draft::AutomationDraft,
     mutations::{remove_action, with_action_mut},
 };
 use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct ActionEditorProps {
-    draft: Signal<Automation>,
+    draft: Signal<AutomationDraft>,
     case_index: Option<usize>,
     action_index: usize,
     action: SendAction,

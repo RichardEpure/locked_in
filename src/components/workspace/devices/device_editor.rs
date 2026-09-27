@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 
-use crate::{
-    DIRTY_EDITOR_SIGNAL, UNSAVED_ENTITY_SIGNAL, config::ConfigCoordinator, hid::HidPresence,
-};
+use crate::{DIRTY_EDITOR_SIGNAL, config::ConfigCoordinator, hid::HidPresence};
 
 use super::{
     draft::{DeviceDraft, device_references},
@@ -92,7 +90,6 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
                             if let Some(saved) = saved { publication_context.acknowledge(saved); }
                             pending_draft.set(None);
                             *DIRTY_EDITOR_SIGNAL.write() = None;
-                            *UNSAVED_ENTITY_SIGNAL.write() = None;
                             selected.set(None);
                         }
                         Err(error) => message.set(Some((false, error.to_string()))),
@@ -133,7 +130,6 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
                     pending_draft.set(None);
                     selected.set(None);
                 }
-                *UNSAVED_ENTITY_SIGNAL.write() = None;
                 *DIRTY_EDITOR_SIGNAL.write() = None;
                 message.set(None);
             }, "Cancel" }
@@ -144,7 +140,6 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
                             publication_context.acknowledge(saved);
                             editor.set(state);
                             pending_draft.set(None);
-                            *UNSAVED_ENTITY_SIGNAL.write() = None;
                             *DIRTY_EDITOR_SIGNAL.write() = None;
                             message.set(Some((true, "Device saved".into())));
                         }
