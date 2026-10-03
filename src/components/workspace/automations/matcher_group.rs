@@ -10,8 +10,8 @@ use crate::{
 
 use super::{
     draft::AutomationDraft,
+    editor_helpers::{matcher_group_body_id, next_child_id, reveal_last_matcher},
     matcher_editor::MatcherEditor,
-    mutations::{add_matcher, matcher_group_body_id, reveal_last_matcher},
 };
 
 #[derive(Props, Clone, PartialEq)]
@@ -23,6 +23,26 @@ pub(super) struct MatcherGroupProps {
     case_name: String,
     exceptions: bool,
     matchers: Vec<WindowMatcher>,
+}
+
+fn add_matcher(draft: &mut Signal<AutomationDraft>, case_index: usize, exceptions: bool) {
+    let case = &mut draft.write().edited.cases[case_index];
+    let id = next_child_id(
+        "matcher",
+        case.applications
+            .iter()
+            .chain(&case.exceptions)
+            .map(|matcher| matcher.id.as_str()),
+    );
+    let list = if exceptions {
+        &mut case.exceptions
+    } else {
+        &mut case.applications
+    };
+    list.push(WindowMatcher {
+        id,
+        ..WindowMatcher::default()
+    });
 }
 
 #[component]

@@ -4,13 +4,13 @@ use dioxus_icons::lucide::{Plus, Search};
 use crate::{DIRTY_EDITOR_SIGNAL, components::capture, config::Automation};
 
 use crate::components::workspace::empty_state::EmptyState;
-use crate::components::workspace::selection::SelectionProps;
 
-use super::{automation_editor::AutomationEditor, publication::new_automation};
+use super::{automation_editor::AutomationEditor, editing::new_automation};
 
 #[component]
-pub(in crate::components::workspace) fn AutomationsView(props: SelectionProps) -> Element {
-    let mut selected = props.selected;
+pub(in crate::components::workspace) fn AutomationsView(
+    mut selected: Signal<Option<String>>,
+) -> Element {
     let mut query = use_signal(String::new);
     let pending_delete = use_signal(|| None::<String>);
     let mut pending_draft = use_signal(|| None::<Automation>);

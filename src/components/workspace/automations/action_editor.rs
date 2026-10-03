@@ -3,14 +3,10 @@ use dioxus_icons::lucide::Trash2;
 
 use crate::{
     automation_runtime::{AutomationRuntime, TestDispatchResult},
-    config::{Device, PublishedConfig, SendAction},
+    config::SendAction,
 };
 
-use super::{
-    INVALID_REPORT_IDS,
-    draft::AutomationDraft,
-    mutations::{remove_action, with_action_mut},
-};
+use super::{INVALID_REPORT_IDS, draft::AutomationDraft};
 use crate::components::workspace::hid_inventory::{HidInventoryContext, hid_presence_view};
 
 #[derive(Props, Clone, PartialEq)]
@@ -28,7 +24,7 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     let mut draft = props.draft;
     let action = props.action;
     let publication = consume_context::<crate::components::PublishedConfigContext>();
-    let devices = action_destinations(&publication.required());
+    let devices = publication.required().editable().devices.clone();
     let devices_with_presence = devices
         .iter()
         .cloned()
@@ -122,8 +118,33 @@ pub(super) fn ActionEditor(props: ActionEditorProps) -> Element {
     }
 }
 
-pub(super) fn action_destinations(publication: &PublishedConfig) -> Vec<Device> {
-    publication.editable().devices.clone()
+fn with_action_mut(
+    draft: &mut Signal<AutomationDraft>,
+    case_index: Option<usize>,
+    action_index: usize,
+    update: impl FnOnce(&mut SendAction),
+) {
+    let mut automation = draft.write();
+    let action = if let Some(index) = case_index {
+        &mut automation.edited.cases[index].actions[action_index]
+    } else {
+        &mut automation.edited.otherwise_actions[action_index]
+    };
+    update(action);
+}
+
+fn remove_action(
+    draft: &mut Signal<AutomationDraft>,
+    case_index: Option<usize>,
+    action_index: usize,
+) {
+    if let Some(index) = case_index {
+        draft.write().edited.cases[index]
+            .actions
+            .remove(action_index);
+    } else {
+        draft.write().edited.otherwise_actions.remove(action_index);
+    }
 }
 
 fn parse_report_hex(value: &str) -> Result<Vec<u8>, hex::FromHexError> {

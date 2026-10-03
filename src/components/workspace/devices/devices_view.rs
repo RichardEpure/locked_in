@@ -18,7 +18,6 @@ use crate::components::PublishedConfigContext;
 use crate::components::workspace::{
     empty_state::EmptyState,
     hid_inventory::{HidInventoryContext, hid_presence_view},
-    selection::SelectionProps,
 };
 
 fn request_inventory_refresh(
@@ -42,13 +41,14 @@ fn request_inventory_refresh(
 }
 
 #[component]
-pub(in crate::components::workspace) fn DevicesView(props: SelectionProps) -> Element {
+pub(in crate::components::workspace) fn DevicesView(
+    mut selected: Signal<Option<String>>,
+) -> Element {
     let runtime = consume_context::<AutomationRuntime>();
     let inventory_context = consume_context::<HidInventoryContext>();
     let publication_context = consume_context::<PublishedConfigContext>();
     let published = publication_context.required();
     let inventory = inventory_context.current();
-    let mut selected = props.selected;
     let pending_draft = use_signal(|| None::<DeviceDraft>);
     let mut query = use_signal(String::new);
     let mut discovery_open = use_signal(|| false);

@@ -8,10 +8,7 @@ use std::{
 };
 
 use super::*;
-use crate::{
-    components::workspace::automations::action_editor::action_destinations,
-    config::{AutomationCase, ConfigStore, Device, StartWithWindows, StartWithWindowsOutcome},
-};
+use crate::config::{AutomationCase, ConfigStore, StartWithWindows, StartWithWindowsOutcome};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -198,32 +195,5 @@ fn captured_matcher_commits_durably_in_one_publication() {
     assert_eq!(
         store.load_for_test().unwrap(),
         *published.editable().as_ref()
-    );
-}
-
-#[test]
-fn action_destinations_follow_the_supplied_publication_revision() {
-    let (_directory, _store, coordinator) = coordinator();
-    let initial = coordinator.current();
-    assert!(action_destinations(&initial).is_empty());
-    let published = coordinator
-        .update(initial.revision(), {
-            let mut next = initial.editable().as_ref().clone();
-            next.devices.push(Device {
-                id: "deck".into(),
-                name: "Deck".into(),
-                report_length: 8,
-                ..Device::default()
-            });
-            next
-        })
-        .unwrap();
-
-    assert_eq!(
-        action_destinations(&published)
-            .into_iter()
-            .map(|device| device.id)
-            .collect::<Vec<_>>(),
-        ["deck"]
     );
 }

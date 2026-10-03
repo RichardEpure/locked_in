@@ -20,14 +20,7 @@ pub static FOCUSED_WINDOW_SIGNAL: GlobalSignal<focused_window::FocusedWindow> =
     Signal::global(win::get_focused_window);
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 
-struct InitialConfiguration {
-    coordinator: Option<Arc<config::ConfigCoordinator>>,
-    publication: Option<Arc<config::PublishedConfig>>,
-    error: Option<String>,
-    config_path_available: bool,
-}
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConfigurationLoadError {
     pub(crate) message: String,
     pub(crate) config_path_available: bool,
@@ -145,38 +138,26 @@ fn initial_window_visible(
 fn load_initial_configuration(
     store: Arc<config::ConfigStore>,
     start_with_windows: Arc<dyn config::StartWithWindows>,
-) -> InitialConfiguration {
-    match config::ConfigCoordinator::initial_load(store, start_with_windows) {
-        Ok(coordinator) => {
-            let coordinator = Arc::new(coordinator);
-            let publication = coordinator.current();
-            InitialConfiguration {
-                coordinator: Some(coordinator),
-                publication: Some(publication.clone()),
-                error: None,
-                config_path_available: true,
-            }
-        }
-        Err(error) => InitialConfiguration {
-            coordinator: None,
-            publication: None,
-            error: Some(format!("Configuration could not be loaded: {error}")),
+) -> Result<Arc<config::ConfigCoordinator>, ConfigurationLoadError> {
+    config::ConfigCoordinator::initial_load(store, start_with_windows)
+        .map(Arc::new)
+        .map_err(|error| ConfigurationLoadError {
+            message: format!("Configuration could not be loaded: {error}"),
             config_path_available: true,
-        },
-    }
+        })
 }
 
 fn initialize_configuration(
     prepared: &PreparedApplicationPaths,
-    load: impl FnOnce(&config::ApplicationPaths) -> InitialConfiguration,
-) -> InitialConfiguration {
+    load: impl FnOnce(
+        &config::ApplicationPaths,
+    ) -> Result<Arc<config::ConfigCoordinator>, ConfigurationLoadError>,
+) -> Result<Arc<config::ConfigCoordinator>, ConfigurationLoadError> {
     match &prepared.bootstrap_error {
-        Some(error) => InitialConfiguration {
-            coordinator: None,
-            publication: None,
-            error: Some(error.clone()),
+        Some(error) => Err(ConfigurationLoadError {
+            message: error.clone(),
             config_path_available: false,
-        },
+        }),
         None => load(&prepared.paths),
     }
 }
@@ -220,15 +201,11 @@ fn main() {
         let store = Arc::new(config::ConfigStore::new(paths.config_path()));
         load_initial_configuration(store, Arc::new(WindowsStartWithWindows))
     });
-    let coordinator = initial.coordinator;
-    let publication = initial.publication;
-    let bootstrap_error = initial.error;
-    let configuration_load_error = bootstrap_error
-        .clone()
-        .map(|message| ConfigurationLoadError {
-            message,
-            config_path_available: initial.config_path_available,
-        });
+    let (coordinator, configuration_load_error) = match initial {
+        Ok(coordinator) => (Some(coordinator), None),
+        Err(error) => (None, Some(error)),
+    };
+    let publication = coordinator.as_ref().map(|value| value.current());
     let settings = publication
         .as_ref()
         .map_or_else(config::Settings::default, |value| {
@@ -236,8 +213,8 @@ fn main() {
         });
     app_log::set_level(settings.log_level);
     app_log::write("application started");
-    if let Some(error) = &bootstrap_error {
-        app_log::write_error(format!("application bootstrap error: {error}"));
+    if let Some(error) = &configuration_load_error {
+        app_log::write_error(format!("application bootstrap error: {}", error.message));
     }
 
     let publication_subscription = coordinator.as_ref().map(|value| value.subscribe());
@@ -275,7 +252,9 @@ fn main() {
                 .with_resizable(true)
                 .with_visible(initial_window_visible(
                     visibility_override,
-                    bootstrap_error.as_deref(),
+                    configuration_load_error
+                        .as_ref()
+                        .map(|error| error.message.as_str()),
                     &settings,
                 )),
         )

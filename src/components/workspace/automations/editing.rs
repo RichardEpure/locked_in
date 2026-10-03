@@ -5,7 +5,7 @@ use crate::{
     focused_window::FocusedWindow,
 };
 
-use super::mutations::insert_captured_matcher;
+use super::editor_helpers::insert_captured_matcher;
 
 #[derive(Debug)]
 pub(in crate::components::workspace) enum AutomationCommitError {

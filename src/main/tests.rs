@@ -74,6 +74,80 @@ impl Drop for TestDirectory {
 }
 
 #[test]
+fn successful_startup_uses_coordinator_settings_and_preserves_visibility_policy() {
+    let directory = TestDirectory::new();
+    let paths = config::ApplicationPaths::from_data_root(&directory.0);
+    let prepared = prepare_application_paths_from(Ok(paths.clone()), paths.clone()).unwrap();
+    let store = Arc::new(config::ConfigStore::new(paths.config_path()));
+    let mut candidate = config::EditableConfig::default();
+    candidate.settings.start_minimized = true;
+    candidate.settings.start_with_windows = true;
+    candidate.settings.log_level = config::LogLevel::Debug;
+    store.save_for_test(&candidate).unwrap();
+    let startup = Arc::new(CountingStartup {
+        calls: AtomicUsize::new(0),
+    });
+
+    let coordinator = initialize_configuration(&prepared, |resolved| {
+        assert_eq!(resolved, &paths);
+        load_initial_configuration(store.clone(), startup.clone())
+    })
+    .unwrap();
+
+    let publication = coordinator.current();
+    assert_eq!(*publication.editable().as_ref(), candidate);
+    assert_eq!(startup.calls.load(Ordering::SeqCst), 1);
+    let settings = &publication.editable().settings;
+    assert!(!initial_window_visible(false, None, settings));
+    assert!(initial_window_visible(true, None, settings));
+    assert!(initial_window_visible(
+        false,
+        Some("startup failed"),
+        settings
+    ));
+    assert!(initial_window_visible(
+        false,
+        None,
+        &config::Settings {
+            start_minimized: false,
+            ..config::Settings::default()
+        }
+    ));
+}
+
+#[test]
+fn semantic_load_failure_keeps_config_accessible_without_registration_or_rewrite() {
+    let directory = TestDirectory::new();
+    let config_path = directory.0.join("config.toml");
+    let store = Arc::new(config::ConfigStore::new(&config_path));
+    let mut candidate = config::EditableConfig::default();
+    candidate.settings.start_with_windows = true;
+    candidate.devices.push(config::Device {
+        id: "invalid-device".into(),
+        report_length: 0,
+        ..config::Device::default()
+    });
+    store.save_for_test(&candidate).unwrap();
+    let source = fs::read_to_string(&config_path).unwrap();
+    let startup = Arc::new(CountingStartup {
+        calls: AtomicUsize::new(0),
+    });
+
+    let error = load_initial_configuration(store, startup.clone())
+        .err()
+        .expect("invalid semantics must fail startup loading");
+
+    assert!(
+        error
+            .message
+            .contains("report length must be greater than zero")
+    );
+    assert!(error.config_path_available);
+    assert_eq!(startup.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read_to_string(config_path).unwrap(), source);
+}
+
+#[test]
 fn strict_load_failure_is_visible_non_destructive_and_skips_startup_registration() {
     let directory = TestDirectory::new();
     let config_path = directory.0.join("config.toml");
@@ -84,20 +158,18 @@ fn strict_load_failure_is_visible_non_destructive_and_skips_startup_registration
         calls: AtomicUsize::new(0),
     });
 
-    let loaded = load_initial_configuration(store, startup.clone());
+    let loaded = load_initial_configuration(store, startup.clone())
+        .err()
+        .expect("invalid configuration must fail startup loading");
 
-    assert!(loaded.coordinator.is_none());
-    assert!(loaded.publication.is_none());
-    assert!(loaded.error.as_deref().is_some_and(|error| {
-        error.contains("Configuration could not be loaded")
-            && error.contains("unsupported config version")
-    }));
+    assert!(loaded.message.contains("Configuration could not be loaded"));
+    assert!(loaded.message.contains("unsupported config version"));
     assert!(loaded.config_path_available);
     assert_eq!(startup.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read_to_string(config_path).unwrap(), invalid_source);
     assert!(initial_window_visible(
         false,
-        loaded.error.as_deref(),
+        Some(&loaded.message),
         &config::Settings::default(),
     ));
 }
@@ -154,12 +226,12 @@ fn fallback_bootstrap_never_invokes_configuration_loading() {
     let initial = initialize_configuration(&prepared, |_| {
         loaded.store(true, Ordering::SeqCst);
         panic!("fallback must not load configuration")
-    });
+    })
+    .err()
+    .expect("fallback must report unavailable configuration");
 
     assert!(!loaded.load(Ordering::SeqCst));
-    assert!(initial.coordinator.is_none());
-    assert!(initial.publication.is_none());
-    assert!(initial.error.is_some());
+    assert!(initial.message.contains("Configuration was not loaded"));
     assert!(!initial.config_path_available);
     assert!(!prepared.paths.config_path().exists());
 }

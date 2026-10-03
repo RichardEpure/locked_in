@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::config::{Automation, ConfigCoordinator, PublishedConfig};
 
-use super::publication::{
+use super::editing::{
     AutomationCommitError, cancel_automation, delete_automation, save_automation,
 };
 

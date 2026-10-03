@@ -74,7 +74,7 @@ pub(super) fn SettingsView() -> Element {
                         }, "Open config file" }
                         button { class: "button secondary", onclick: {
                             let coordinator = coordinator.clone();
-                            move |_| match reload_settings(&coordinator) {
+                            move |_| match coordinator.reload() {
                                 Ok(reloaded) => {
                                     publication_context.acknowledge(reloaded.clone());
                                     let warning = config_warning_message(reloaded.warnings());
@@ -150,12 +150,6 @@ fn save_settings(
     let mut candidate = coordinator.editable_at_revision(expected_revision)?;
     candidate.settings = settings;
     coordinator.update(expected_revision, candidate)
-}
-
-fn reload_settings(
-    coordinator: &ConfigCoordinator,
-) -> Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
-    coordinator.reload()
 }
 
 fn config_error_message(error: &ConfigCoordinatorError) -> String {

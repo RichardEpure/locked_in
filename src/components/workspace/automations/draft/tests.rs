@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::super::publication::{duplicate_automation, new_automation};
+use super::super::editing::{duplicate_automation, new_automation};
 use super::*;
 use crate::config::{ConfigStore, StartWithWindows, StartWithWindowsOutcome};
 

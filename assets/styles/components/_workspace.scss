@@ -15,8 +15,11 @@
 
 .load-error {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     width: min(720px, calc(100vw - 60px));
+    max-height: calc(100vh - 120px);
     margin: 60px auto;
+    overflow-y: auto;
     align-content: start;
     gap: 24px;
 
@@ -40,6 +43,8 @@
         margin: 0 0 18px;
         padding: 12px;
         overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
         color: var(--danger);
         background: #11161d;
         border-radius: 6px;

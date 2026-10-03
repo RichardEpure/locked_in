@@ -6,8 +6,8 @@ use dioxus_icons::lucide::{ArrowDown, ArrowUp, Plus, Trash2};
 use crate::config::AutomationCase;
 
 use super::{
-    action_editor::ActionEditor, draft::AutomationDraft, matcher_group::MatcherGroup,
-    mutations::add_action,
+    action_editor::ActionEditor, draft::AutomationDraft, editor_helpers::add_action,
+    matcher_group::MatcherGroup,
 };
 
 #[derive(Props, Clone, PartialEq)]

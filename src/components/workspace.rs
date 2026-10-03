@@ -20,7 +20,6 @@ mod capture_dialog;
 mod devices;
 mod empty_state;
 mod hid_inventory;
-mod selection;
 mod settings_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

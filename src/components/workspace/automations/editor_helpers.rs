@@ -4,48 +4,9 @@ use dioxus::prelude::*;
 
 use super::draft::AutomationDraft;
 use crate::{
-    config::{Automation, AutomationCase, SendAction, TextCondition, WindowMatcher},
+    config::{Automation, SendAction, TextCondition, WindowMatcher},
     focused_window::FocusedWindow,
 };
-
-pub(super) fn add_case(draft: &mut Signal<AutomationDraft>) {
-    let snapshot = draft.read();
-    let index = snapshot.edited.cases.len() + 1;
-    let id = next_child_id(
-        "case",
-        snapshot.edited.cases.iter().map(|case| case.id.as_str()),
-    );
-    drop(snapshot);
-    draft.write().edited.cases.push(AutomationCase {
-        id,
-        name: format!("Case {index}"),
-        ..AutomationCase::default()
-    });
-}
-
-pub(super) fn add_matcher(
-    draft: &mut Signal<AutomationDraft>,
-    case_index: usize,
-    exceptions: bool,
-) {
-    let case = &mut draft.write().edited.cases[case_index];
-    let id = next_child_id(
-        "matcher",
-        case.applications
-            .iter()
-            .chain(&case.exceptions)
-            .map(|matcher| matcher.id.as_str()),
-    );
-    let list = if exceptions {
-        &mut case.exceptions
-    } else {
-        &mut case.applications
-    };
-    list.push(WindowMatcher {
-        id,
-        ..WindowMatcher::default()
-    });
-}
 
 pub(in crate::components::workspace) fn insert_captured_matcher(
     automation: &mut Automation,
@@ -135,36 +96,7 @@ pub(super) fn add_action(draft: &mut Signal<AutomationDraft>, case_index: Option
     }
 }
 
-pub(super) fn with_action_mut(
-    draft: &mut Signal<AutomationDraft>,
-    case_index: Option<usize>,
-    action_index: usize,
-    update: impl FnOnce(&mut SendAction),
-) {
-    let mut automation = draft.write();
-    let action = if let Some(index) = case_index {
-        &mut automation.edited.cases[index].actions[action_index]
-    } else {
-        &mut automation.edited.otherwise_actions[action_index]
-    };
-    update(action);
-}
-
-pub(super) fn remove_action(
-    draft: &mut Signal<AutomationDraft>,
-    case_index: Option<usize>,
-    action_index: usize,
-) {
-    if let Some(index) = case_index {
-        draft.write().edited.cases[index]
-            .actions
-            .remove(action_index);
-    } else {
-        draft.write().edited.otherwise_actions.remove(action_index);
-    }
-}
-
-fn next_child_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
+pub(super) fn next_child_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
     let existing = existing.collect::<HashSet<_>>();
     (1..)
         .map(|index| format!("{prefix}-{index}"))

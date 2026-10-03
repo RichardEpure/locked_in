@@ -6,7 +6,7 @@ use dioxus_icons::lucide::{AppWindow, Plus};
 use crate::{
     DIRTY_EDITOR_SIGNAL,
     components::{PublishedConfigContext, capture},
-    config::{Automation, ConfigCoordinator},
+    config::{Automation, AutomationCase, ConfigCoordinator},
 };
 
 use super::{
@@ -14,10 +14,10 @@ use super::{
     action_editor::ActionEditor,
     case_editor::CaseEditor,
     draft::AutomationDraft,
-    mutations::{
-        add_action, add_case, insert_captured_matcher, matcher_group_name, reveal_last_matcher,
+    editing::{AutomationCommitError, duplicate_automation},
+    editor_helpers::{
+        add_action, insert_captured_matcher, matcher_group_name, next_child_id, reveal_last_matcher,
     },
-    publication::{AutomationCommitError, duplicate_automation},
 };
 
 #[derive(Props, Clone, PartialEq)]
@@ -26,6 +26,21 @@ pub(super) struct AutomationEditorProps {
     selected: Signal<Option<String>>,
     pending_delete: Signal<Option<String>>,
     pending_draft: Signal<Option<Automation>>,
+}
+
+fn add_case(draft: &mut Signal<AutomationDraft>) {
+    let snapshot = draft.read();
+    let index = snapshot.edited.cases.len() + 1;
+    let id = next_child_id(
+        "case",
+        snapshot.edited.cases.iter().map(|case| case.id.as_str()),
+    );
+    drop(snapshot);
+    draft.write().edited.cases.push(AutomationCase {
+        id,
+        name: format!("Case {index}"),
+        ..AutomationCase::default()
+    });
 }
 
 #[component]
@@ -239,7 +254,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
         }
         div {
             class: "editor-scroll",
-            section { class: "editor-card overview-card",
+            section { class: "editor-card",
                 div { class: "section-heading split", span { class: "step", "01" } div { h3 { "Automation" } p { "Name this automation and choose when it is active" } }
                     label { class: "toggle-field", span { "Enabled" } input { type: "checkbox", checked: snapshot.enabled, onchange: move |event| draft.write().edited.enabled = event.checked() } }
                 }
@@ -247,7 +262,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                     label { "Name" input { value: "{snapshot.name}", oninput: move |event| draft.write().edited.name = event.value() } }
                 }
             }
-            section { class: "editor-card trigger-card",
+            section { class: "editor-card",
                 div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "This automation runs when focus moves to another window" } } }
                 div { class: "trigger-summary", span { class: "trigger-icon", AppWindow { size: 18, "aria-hidden": "true" } } div { strong { "Focused window changes" } small { "Match title, class, and executable details in the cases below" } } span { class: "pill", "Windows" } }
             }

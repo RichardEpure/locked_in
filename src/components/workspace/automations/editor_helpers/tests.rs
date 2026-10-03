@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::AutomationCase;
 
 fn automation_with_case() -> Automation {
     Automation {
