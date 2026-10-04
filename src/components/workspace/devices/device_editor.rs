@@ -113,7 +113,6 @@ pub(super) fn DeviceEditor(props: DeviceEditorProps) -> Element {
                     NumericField { label: "Report length (bytes)", value: device.report_length, max: u16::MAX, format: NumericFormat::Decimal, on_change: move |value| editor.write().edited.report_length = value }
                     NumericField { label: "Report ID (hex)", value: device.report_id.into(), max: u8::MAX.into(), format: NumericFormat::Hexadecimal { width: 2 }, on_change: move |value| if let Ok(value) = u8::try_from(value) { editor.write().edited.report_id = value } }
                 }
-                div { class: "device-note", strong { "Use a connected device" } p { "Use Connected interfaces to add or select a detected device, or enter HID values manually." } }
             }
             if !references.is_empty() { section { class: "editor-card references", h3 { "Used by" } p { "{references_text}" } } }
         }
