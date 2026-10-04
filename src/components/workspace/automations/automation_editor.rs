@@ -216,11 +216,9 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
 
     rsx! {
         header {
-            class: "workspace-header",
+            class: "workspace-header automation-header",
             div {
-                div { class: "eyebrow", "FOCUSED WINDOW AUTOMATION" }
                 h2 { "{snapshot.name}" if dirty { span { class: "dirty-dot", title: "Unsaved changes", aria_hidden: true, "•" } span { class: "visually-hidden", "Unsaved changes" } } }
-                p { "First matching case runs. Otherwise is used only when no case matches." }
             }
             div { class: "toolbar",
                 button {
@@ -300,7 +298,7 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                 }
             }
             section { class: "editor-card",
-                div { class: "section-heading split", span { class: "step", "03" } div { h3 { "Cases" } p { "Evaluated from top to bottom; first match wins" } }
+                div { class: "section-heading split", span { class: "step", "03" } div { h3 { "Cases" } p { "Cases are evaluated from top to bottom. The first matching case runs." } }
                     button { class: "button secondary", onclick: move |_| add_case(&mut draft), Plus { size: 16, "aria-hidden": "true" } "Add case" }
                 }
                 if snapshot.cases.is_empty() {

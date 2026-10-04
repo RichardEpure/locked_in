@@ -38,6 +38,12 @@
         margin-top: 7px;
         font-size: 0.9rem;
     }
+
+    &.automation-header {
+        align-items: center;
+        min-height: auto;
+        padding-block: 20px;
+    }
 }
 
 .eyebrow {
