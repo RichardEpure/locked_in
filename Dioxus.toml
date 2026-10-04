@@ -8,9 +8,6 @@ title = "Locked In"
 # include `assets` in web platform
 [web.resource]
 
-# Additional CSS style files
-style = ["assets/styles/main.css"]
-
 # Additional JavaScript files
 script = []
 
@@ -21,9 +18,13 @@ script = []
 script = []
 
 [bundle]
-identifier = "richard"
+identifier = "LockedIn.LockedIn"
 publisher = "richard"
 icon = ["assets/favicon.ico"]
+resources = ["THIRD_PARTY_LICENSES.txt"]
 
 [bundle.windows]
 icon_path = "assets/favicon.ico"
+
+[bundle.windows.nsis]
+installer_hooks = "installer/nsis-hooks.nsh"

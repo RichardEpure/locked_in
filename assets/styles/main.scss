@@ -1,41 +1,21 @@
-@use "./fonts.scss";
-
-@use "pico" with (
-    $theme-color: "amber"
-);
-
-// Components
-@use "./components/rules";
-
-:root {
-    --pico-font-family-sans-serif:
-        "Roboto", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-    --pico-del-color-hover: hsl(2, 46%, 70%);
-}
-
-body,
-main,
-#main {
-    height: 100vh;
-    max-height: 100vh;
-    overflow: hidden;
-}
-
-main {
-    display: flex;
-    flex-direction: column;
-}
-
-button.danger {
-    border-color: var(--pico-del-color);
-    background-color: var(--pico-del-color);
-
-    &:hover {
-        background: var(--pico-del-color-hover);
-    }
-
-    &:focus-visible {
-        box-shadow: 0 0 0 var(--pico-outline-width)
-            color-mix(in srgb, var(--pico-del-color) 35%, transparent);
-    }
-}
+@use "fonts";
+@use "base/tokens";
+@use "base/elements";
+@use "components/workspace";
+@use "patterns/controls";
+@use "patterns/entity-list";
+@use "patterns/editor-chrome";
+@use "patterns/feedback";
+@use "components/devices-view";
+@use "components/automation-editor";
+@use "components/case-editor";
+@use "components/matcher-group";
+@use "components/matcher-editor";
+@use "components/condition-row";
+@use "components/action-editor";
+@use "components/device-editor";
+@use "components/settings-view";
+@use "components/empty-state";
+@use "components/capture-dialog";
+@use "base/scrollbars";
+@use "patterns/responsive";

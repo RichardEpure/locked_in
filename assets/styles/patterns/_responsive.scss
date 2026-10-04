@@ -1,0 +1,55 @@
+@media (max-width: 1120px) {
+    .app-shell {
+        grid-template-columns: 58px 250px minmax(0, 1fr);
+    }
+
+    .app-nav {
+        align-items: center;
+        padding-inline: 8px;
+    }
+
+    .brand {
+        margin-inline: 0;
+    }
+
+    .brand > span:last-child,
+    .nav-item__label {
+        display: none;
+    }
+
+    .app-nav__status {
+        width: 40px;
+        justify-content: center;
+        padding-inline: 0;
+    }
+
+    .app-nav__status-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        clip-path: inset(50%);
+    }
+
+    .nav-item {
+        width: 40px;
+        justify-content: center;
+        padding: 0;
+    }
+
+    .condition-row {
+        grid-template-columns: 90px 108px minmax(100px, 1fr) 42px;
+    }
+
+    .matcher-group__heading > .toolbar {
+        margin-left: auto;
+    }
+
+    .editor-scroll,
+    .workspace-header,
+    .save-bar {
+        padding-inline: 22px;
+    }
+}

@@ -1,0 +1,182 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Immutable artifact ID of the validated Windows installer
+        required: true
+        type: string
+      tag:
+        description: Cargo-derived version tag, for example v0.1.0
+        required: true
+        type: string
+      release_type:
+        description: GitHub release type
+        required: true
+        default: prerelease
+        type: choice
+        options:
+          - prerelease
+          - stable
+
+concurrency:
+  group: windows-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Publish selected installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Validate artifact source
+        id: source
+        shell: pwsh
+        env:
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_REF -cne "refs/heads/main") {
+            throw "Run this workflow from main."
+          }
+          if ($env:ARTIFACT_ID -notmatch '^\d+$') {
+            throw "Artifact ID must be numeric."
+          }
+          if ($env:RELEASE_TYPE -notin @("prerelease", "stable")) {
+            throw "Release type must be 'prerelease' or 'stable'."
+          }
+
+          $artifact = gh api `
+            "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:ARTIFACT_ID" |
+            ConvertFrom-Json
+          if ([bool]$artifact.expired -or $null -eq $artifact.workflow_run) {
+            throw "Selected artifact is expired or has no workflow run."
+          }
+
+          $runId = [string]$artifact.workflow_run.id
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" | ConvertFrom-Json
+          if ([string]$run.path -cne ".github/workflows/windows-build.yml" -or
+              [string]$run.status -cne "completed" -or
+              [string]$run.conclusion -cne "success" -or
+              [string]$run.event -notin @("push", "workflow_dispatch")) {
+            throw "Selected artifact did not come from a successful releasable Windows build."
+          }
+          if ([string]$run.head_sha -cne [string]$artifact.workflow_run.head_sha) {
+            throw "Selected artifact and build run reference different commits."
+          }
+          if ([string]$artifact.name -notmatch "^windows-installer-$runId-\d+$") {
+            throw "Selected artifact has an unexpected name."
+          }
+
+          "run_id=$runId" >> $env:GITHUB_OUTPUT
+          "head_sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
+
+      - name: Download selected installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          path: ${{ runner.temp }}/windows-installer
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source.outputs.run_id }}
+
+      - name: Verify selected installer
+        id: installer
+        shell: pwsh
+        env:
+          EXPECTED_COMMIT: ${{ steps.source.outputs.head_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $artifactDirectory = "$env:RUNNER_TEMP/windows-installer"
+          $manifest = Get-Content `
+            (Join-Path $artifactDirectory "windows-release-manifest.json") `
+            -Raw | ConvertFrom-Json
+
+          if ([int]$manifest.schemaVersion -ne 1 -or
+              [string]$manifest.commitSha -cne $env:EXPECTED_COMMIT -or
+              $env:RELEASE_TAG -cne "v$($manifest.version)") {
+            throw "Artifact provenance or release tag does not match."
+          }
+
+          $installerName = "LockedIn_$($manifest.version)_x64-setup.exe"
+          $checksumName = "$installerName.sha256"
+          if ([string]$manifest.installerFile -cne $installerName -or
+              [string]$manifest.checksumFile -cne $checksumName) {
+            throw "Artifact filenames do not match the Cargo version."
+          }
+
+          $installerPath = Join-Path $artifactDirectory $installerName
+          $checksumPath = Join-Path $artifactDirectory $checksumName
+          $sha256 = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumLine = (Get-Content $checksumPath -Raw).Trim()
+          if ($sha256 -cne [string]$manifest.sha256 -or
+              $checksumLine -cne "$sha256  $installerName") {
+            throw "Installer checksum does not match."
+          }
+          if ([string]$manifest.signatureStatus -notin @("NotSigned", "Valid")) {
+            throw "Artifact has an invalid Authenticode status."
+          }
+
+          "installer=$installerPath" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+          "signature_status=$($manifest.signatureStatus)" >> $env:GITHUB_OUTPUT
+
+      - name: Create tag and release
+        id: release
+        shell: pwsh
+        env:
+          CHECKSUM_PATH: ${{ steps.installer.outputs.checksum }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.source.outputs.head_sha }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.installer }}
+          INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          SIGNATURE_STATUS: ${{ steps.installer.outputs.signature_status }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" `
+            -f ref="refs/tags/$env:RELEASE_TAG" `
+            -f sha="$env:HEAD_SHA" | Out-Null
+
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $notes = @(
+            "Windows installer built from commit ``$env:HEAD_SHA``.",
+            "",
+            "SHA-256: ``$env:INSTALLER_SHA256``"
+          )
+          if ($env:SIGNATURE_STATUS -ceq "NotSigned") {
+            $notes += @(
+              "",
+              "**Unsigned installer:** Windows or Microsoft Defender SmartScreen may warn before installation."
+            )
+          }
+          $notes | Set-Content $notesPath -Encoding utf8NoBOM
+
+          $arguments = @(
+            "release", "create", $env:RELEASE_TAG,
+            $env:INSTALLER_PATH,
+            $env:CHECKSUM_PATH,
+            "--repo", $env:GITHUB_REPOSITORY,
+            "--verify-tag",
+            "--title", "LockedIn $env:RELEASE_TAG",
+            "--notes-file", $notesPath
+          )
+          if ($env:RELEASE_TYPE -ceq "prerelease") {
+            $arguments += @("--prerelease", "--latest=false")
+          }
+
+          $url = & gh @arguments
+          "url=$url" >> $env:GITHUB_OUTPUT
+
+      - name: Report release
+        run: echo "Published ${{ steps.release.outputs.url }}"

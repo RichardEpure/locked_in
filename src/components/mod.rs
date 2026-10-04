@@ -1,7 +1,10 @@
-pub mod devices;
-pub mod dialog;
-pub mod edit_device;
-pub mod edit_rule;
-pub mod events;
-pub mod hid_devices;
-pub mod rules;
+mod app;
+mod armed_capture_shortcut;
+mod capture;
+mod capture_shortcut;
+mod published_config;
+mod workspace;
+
+pub(crate) use app::App;
+
+pub(crate) use published_config::PublishedConfigContext;

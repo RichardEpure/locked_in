@@ -1,0 +1,62 @@
+use std::{
+    env,
+    path::{self, Path, PathBuf},
+};
+
+use anyhow::{Context, Result};
+
+const CONFIG_FILE: &str = "config.toml";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationPaths {
+    data_root: PathBuf,
+}
+
+impl ApplicationPaths {
+    pub fn from_data_root(data_root: impl Into<PathBuf>) -> Self {
+        Self {
+            data_root: data_root.into(),
+        }
+    }
+
+    pub fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.data_root.join(CONFIG_FILE)
+    }
+
+    pub fn log_directory(&self) -> PathBuf {
+        self.data_root.join("logs")
+    }
+
+    pub fn panic_log_path(&self) -> PathBuf {
+        self.data_root.join("panic.log")
+    }
+
+    pub fn webview_data_directory(&self) -> PathBuf {
+        self.data_root.join("webview")
+    }
+}
+
+pub fn resolve_application_paths() -> Result<ApplicationPaths> {
+    if let Some(path) = env::var_os("LOCKED_IN_DATA_DIR") {
+        return resolve_override(PathBuf::from(path));
+    }
+    if cfg!(debug_assertions) {
+        return env::current_dir()
+            .map(ApplicationPaths::from_data_root)
+            .context("Failed to get current directory");
+    }
+    crate::platform::locations::default_data_root().map(ApplicationPaths::from_data_root)
+}
+
+fn resolve_override(data_root: PathBuf) -> Result<ApplicationPaths> {
+    path::absolute(data_root)
+        .map(ApplicationPaths::from_data_root)
+        .context("Failed to resolve LOCKED_IN_DATA_DIR")
+}
+
+#[cfg(test)]
+mod tests;

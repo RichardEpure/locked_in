@@ -1,0 +1,33 @@
+.case-card {
+    margin-top: 14px;
+    overflow: hidden;
+    background: #161c24;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+
+    &__header {
+        display: grid;
+        grid-template-columns: 30px minmax(160px, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        background: linear-gradient(90deg, rgb(47 140 255 / 10%), transparent 60%);
+        border-bottom: 1px solid var(--border);
+    }
+
+    &__body {
+        padding: 14px;
+    }
+}
+
+.priority {
+    display: grid;
+    width: 25px;
+    height: 25px;
+    place-items: center;
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-weight: 700;
+    border: 1px solid rgb(97 168 255 / 30%);
+    border-radius: 50%;
+}
