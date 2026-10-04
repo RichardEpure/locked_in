@@ -6,7 +6,7 @@ use dioxus_icons::lucide::{AppWindow, Plus};
 use crate::{
     DIRTY_EDITOR_SIGNAL,
     components::{PublishedConfigContext, capture},
-    config::{Automation, AutomationCase, ConfigCoordinator},
+    config::{Automation, AutomationCase, ConfigCoordinator, EventKind},
 };
 
 use super::{
@@ -19,6 +19,17 @@ use super::{
         add_action, insert_captured_matcher, matcher_group_name, next_child_id, reveal_last_matcher,
     },
 };
+
+const EVENT_CHOICES: [EventKind; 1] = [EventKind::FocusedWindowChanged];
+
+fn event_copy(event: EventKind) -> (&'static str, &'static str) {
+    match event {
+        EventKind::FocusedWindowChanged => (
+            "Focused window changes",
+            "Runs when focus moves to another window. Match title, class, and executable details in the cases below.",
+        ),
+    }
+}
 
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct AutomationEditorProps {
@@ -82,6 +93,8 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
     let mut message = use_signal(|| None::<(bool, String)>);
     let mut collapsed_matcher_groups = use_signal(HashSet::<(String, bool)>::new);
     let snapshot = draft.read().edited.clone();
+    let (_, event_help) = event_copy(snapshot.event);
+    let event_help_id = format!("automation-event-help-{id}");
     let editor_token = format!("automation:{id}");
     let dirty = draft.read().is_dirty();
     let capture_notice = capture::session().cancellation_message();
@@ -263,8 +276,28 @@ pub(super) fn AutomationEditor(props: AutomationEditorProps) -> Element {
                 }
             }
             section { class: "editor-card",
-                div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "This automation runs when focus moves to another window" } } }
-                div { class: "trigger-summary", span { class: "trigger-icon", AppWindow { size: 18, "aria-hidden": "true" } } div { strong { "Focused window changes" } small { "Match title, class, and executable details in the cases below" } } span { class: "pill", "Windows" } }
+                div { class: "section-heading", span { class: "step", "02" } div { h3 { "When" } p { "Choose the event that starts this automation" } } }
+                div { class: "trigger-summary",
+                    span { class: "trigger-icon", AppWindow { size: 18, "aria-hidden": "true" } }
+                    div {
+                        label { "Event"
+                            select {
+                                value: snapshot.event.to_string(),
+                                aria_describedby: event_help_id.clone(),
+                                onchange: move |event| {
+                                    let value = event.value();
+                                    if let Some(kind) = EVENT_CHOICES.into_iter().find(|kind| kind.to_string() == value) {
+                                        draft.write().edited.event = kind;
+                                    }
+                                },
+                                for kind in EVENT_CHOICES {
+                                    option { value: kind.to_string(), {event_copy(kind).0} }
+                                }
+                            }
+                        }
+                        small { id: event_help_id, "{event_help}" }
+                    }
+                }
             }
             section { class: "editor-card",
                 div { class: "section-heading split", span { class: "step", "03" } div { h3 { "Cases" } p { "Evaluated from top to bottom; first match wins" } }
