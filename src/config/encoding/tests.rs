@@ -24,6 +24,26 @@ fn schema_version_is_not_editable_configuration_data() {
 }
 
 #[test]
+fn launch_at_login_round_trips_only_the_established_v2_wire_key() {
+    for enabled in [true, false] {
+        let source = format!("version = 2\n[settings]\nstart_with_windows = {enabled}\n");
+        let decoded = decode(&source).unwrap();
+        assert_eq!(decoded.settings.launch_at_login, enabled);
+
+        let encoded = encode(&decoded).unwrap();
+        let document = toml::from_str::<toml::Table>(&encoded).unwrap();
+        let settings = document["settings"].as_table().unwrap();
+        assert_eq!(
+            settings.get("start_with_windows"),
+            Some(&toml::Value::Boolean(enabled))
+        );
+        assert!(!settings.contains_key("launch_at_login"));
+        assert_eq!(decode(&encoded).unwrap(), decoded);
+    }
+    assert!(decode("version = 2\n[settings]\nlaunch_at_login = true\n").is_err());
+}
+
+#[test]
 fn missing_schema_version_is_rejected() {
     assert!(decode("[settings]\nstart_minimized = true").is_err());
 }

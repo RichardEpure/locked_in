@@ -374,7 +374,6 @@ fn routed_config(routes: &[(&str, u8)]) -> EditableConfig {
 fn focused(generation: u64, title: &str) -> ForegroundObservation {
     ForegroundObservation {
         generation,
-        raw_hwnd: generation as isize,
         window: FocusedWindow {
             title: Some(title.to_string()),
             ..FocusedWindow::default()
@@ -658,13 +657,14 @@ fn config_replacement_completed_before_claim_supplies_the_focus_snapshot() {
 
 #[test]
 fn coordinator_publication_closes_startup_and_claim_gaps_and_survives_source_closure() {
-    use crate::config::{
-        ConfigCoordinator, ConfigStore, StartWithWindows, StartWithWindowsOutcome,
+    use crate::{
+        config::{ConfigCoordinator, ConfigStore},
+        platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
     };
     struct Startup;
-    impl StartWithWindows for Startup {
-        fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
-            StartWithWindowsOutcome::confirmed(desired)
+    impl LaunchAtLogin for Startup {
+        fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
+            LaunchAtLoginOutcome::confirmed(desired)
         }
     }
     struct Directory(std::path::PathBuf);

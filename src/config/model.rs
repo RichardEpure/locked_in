@@ -16,8 +16,8 @@ pub struct Settings {
     pub start_minimized: bool,
     #[serde(default = "default_true")]
     pub close_to_tray: bool,
-    #[serde(default)]
-    pub start_with_windows: bool,
+    #[serde(default, rename = "start_with_windows")]
+    pub launch_at_login: bool,
     #[serde(default)]
     pub log_level: LogLevel,
 }
@@ -27,7 +27,7 @@ impl Default for Settings {
         Self {
             start_minimized: true,
             close_to_tray: true,
-            start_with_windows: false,
+            launch_at_login: false,
             log_level: LogLevel::Info,
         }
     }

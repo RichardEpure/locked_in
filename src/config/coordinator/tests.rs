@@ -95,13 +95,13 @@ impl CoordinatorStore for FakeStore {
     }
 }
 
-struct FakeStartWithWindows {
-    outcomes: Mutex<VecDeque<StartWithWindowsOutcome>>,
+struct FakeLaunchAtLogin {
+    outcomes: Mutex<VecDeque<LaunchAtLoginOutcome>>,
     events: Events,
     reconcile_hook: Mutex<Option<ReentryHook>>,
 }
 
-impl FakeStartWithWindows {
+impl FakeLaunchAtLogin {
     fn new(events: Events) -> Self {
         Self {
             outcomes: Mutex::new(VecDeque::new()),
@@ -110,7 +110,7 @@ impl FakeStartWithWindows {
         }
     }
 
-    fn push(&self, outcome: StartWithWindowsOutcome) {
+    fn push(&self, outcome: LaunchAtLoginOutcome) {
         self.outcomes.lock().unwrap().push_back(outcome);
     }
 
@@ -119,8 +119,8 @@ impl FakeStartWithWindows {
     }
 }
 
-impl StartWithWindows for FakeStartWithWindows {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
+impl LaunchAtLogin for FakeLaunchAtLogin {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
         record(&self.events, &format!("reconcile:{desired}"));
         if let Some(hook) = self.reconcile_hook.lock().unwrap().clone() {
             hook();
@@ -129,7 +129,7 @@ impl StartWithWindows for FakeStartWithWindows {
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| StartWithWindowsOutcome::confirmed(desired))
+            .unwrap_or_else(|| LaunchAtLoginOutcome::confirmed(desired))
     }
 }
 
@@ -150,18 +150,17 @@ fn coordinator(
 ) -> (
     Arc<ConfigCoordinator>,
     Arc<FakeStore>,
-    Arc<FakeStartWithWindows>,
+    Arc<FakeLaunchAtLogin>,
     Events,
 ) {
     let events = Events::default();
     let store = Arc::new(FakeStore::new(config, Arc::clone(&events)));
-    let start_with_windows = Arc::new(FakeStartWithWindows::new(Arc::clone(&events)));
+    let launch_at_login = Arc::new(FakeLaunchAtLogin::new(Arc::clone(&events)));
     let coordinator = Arc::new(
-        ConfigCoordinator::initial_load_with_store(store.clone(), start_with_windows.clone())
-            .unwrap(),
+        ConfigCoordinator::initial_load_with_store(store.clone(), launch_at_login.clone()).unwrap(),
     );
     clear(&events);
-    (coordinator, store, start_with_windows, events)
+    (coordinator, store, launch_at_login, events)
 }
 
 fn active_config() -> EditableConfig {
@@ -193,13 +192,13 @@ fn active_config() -> EditableConfig {
 }
 
 fn assert_start_warning(warning: &ConfigWarning, expected_desired: bool, expected_confirmed: bool) {
-    let ConfigWarning::StartWithWindows {
+    let ConfigWarning::LaunchAtLogin {
         desired,
         confirmed,
         message,
     } = warning
     else {
-        panic!("expected Start with Windows warning");
+        panic!("expected launch-at-login warning");
     };
     assert_eq!(*desired, expected_desired);
     assert_eq!(*confirmed, Some(expected_confirmed));
@@ -212,14 +211,14 @@ fn assert_rollback_warning(
     expected_attempted: bool,
     expected_confirmed: Option<bool>,
 ) {
-    let ConfigWarning::StartWithWindowsRollback {
+    let ConfigWarning::LaunchAtLoginRollback {
         target,
         attempted,
         confirmed,
         ..
     } = warning
     else {
-        panic!("expected Start with Windows rollback warning");
+        panic!("expected launch-at-login rollback warning");
     };
     assert_eq!(*target, expected_target);
     assert_eq!(*attempted, expected_attempted);
@@ -231,10 +230,10 @@ fn initial_load_publishes_one_matching_immutable_revision() {
     let config = active_config();
     let events = Events::default();
     let store = Arc::new(FakeStore::new(config.clone(), Arc::clone(&events)));
-    let start_with_windows = Arc::new(FakeStartWithWindows::new(Arc::clone(&events)));
+    let launch_at_login = Arc::new(FakeLaunchAtLogin::new(Arc::clone(&events)));
 
-    let coordinator = ConfigCoordinator::initial_load_with_store(store, start_with_windows)
-        .expect("initial load");
+    let coordinator =
+        ConfigCoordinator::initial_load_with_store(store, launch_at_login).expect("initial load");
     let current = coordinator.current();
     let subscription = coordinator.subscribe();
     let subscribed = subscription.borrow().clone();
@@ -271,7 +270,7 @@ fn update_orders_candidate_reconciliation_save_then_one_publication() {
             coordinator.update(INITIAL_REVISION, {
                 record(&events, "build");
                 let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-                candidate.settings.start_with_windows = true;
+                candidate.settings.launch_at_login = true;
                 candidate
             })
         }
@@ -289,7 +288,7 @@ fn update_orders_candidate_reconciliation_save_then_one_publication() {
     let observed = subscription.borrow_and_update().clone();
     assert!(Arc::ptr_eq(&published, &observed));
     assert!(!subscription.has_changed().unwrap());
-    assert!(store.disk().settings.start_with_windows);
+    assert!(store.disk().settings.launch_at_login);
 }
 
 #[test]
@@ -342,11 +341,11 @@ fn candidate_built_before_another_commit_cannot_overwrite_it() {
 
 #[test]
 fn adapter_and_store_mutation_reentry_is_rejected_without_deadlock() {
-    let (coordinator, store, start_with_windows, _) = coordinator(EditableConfig::default());
+    let (coordinator, store, launch_at_login, _) = coordinator(EditableConfig::default());
     let adapter_rejected = Arc::new(AtomicBool::new(false));
     let store_rejected = Arc::new(AtomicBool::new(false));
 
-    start_with_windows.on_reconcile({
+    launch_at_login.on_reconcile({
         let coordinator = Arc::downgrade(&coordinator);
         let adapter_rejected = Arc::clone(&adapter_rejected);
         Arc::new(move || {
@@ -399,7 +398,7 @@ fn validation_or_compilation_failure_never_calls_the_os_or_store() {
         .update(INITIAL_REVISION, {
             record(&events, "build");
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate.devices.push(Device::default());
             candidate
         })
@@ -451,9 +450,9 @@ fn store_failure_keeps_prior_publication_revision_and_disk() {
 
 #[test]
 fn successful_os_change_followed_by_save_failure_rolls_back() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(true));
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(false));
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(true));
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(false));
     store.fail_save();
     let before = coordinator.current();
     let subscription = coordinator.subscribe();
@@ -461,7 +460,7 @@ fn successful_os_change_followed_by_save_failure_rolls_back() {
     let error = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate.settings.close_to_tray = false;
             candidate
         })
@@ -486,9 +485,9 @@ fn successful_os_change_followed_by_save_failure_rolls_back() {
 
 #[test]
 fn unconfirmed_rollback_is_reported_without_claiming_restoration() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(true));
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(true));
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "rollback could not be queried",
     ));
     store.fail_save();
@@ -496,7 +495,7 @@ fn unconfirmed_rollback_is_reported_without_claiming_restoration() {
     let error = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate
         })
         .unwrap_err();
@@ -511,7 +510,7 @@ fn unconfirmed_rollback_is_reported_without_claiming_restoration() {
     assert_rollback_warning(&error.warnings()[0], false, true, None);
     assert!(matches!(
         &error.warnings()[0],
-        ConfigWarning::StartWithWindowsRollback {
+        ConfigWarning::LaunchAtLoginRollback {
             message: Some(message),
             ..
         } if message == "rollback could not be queried"
@@ -526,15 +525,15 @@ fn unconfirmed_rollback_is_reported_without_claiming_restoration() {
 
 #[test]
 fn failed_rollback_reports_the_confirmed_actual_state() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(true));
-    start_with_windows.push(StartWithWindowsOutcome::warning(true, "still enabled"));
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(true));
+    launch_at_login.push(LaunchAtLoginOutcome::warning(true, "still enabled"));
     store.fail_save();
 
     let error = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate
         })
         .unwrap_err();
@@ -542,7 +541,7 @@ fn failed_rollback_reports_the_confirmed_actual_state() {
     assert_rollback_warning(&error.warnings()[0], false, true, Some(true));
     assert!(matches!(
         &error.warnings()[0],
-        ConfigWarning::StartWithWindowsRollback {
+        ConfigWarning::LaunchAtLoginRollback {
             message: Some(message),
             ..
         } if message == "still enabled"
@@ -557,18 +556,18 @@ fn failed_rollback_reports_the_confirmed_actual_state() {
 
 #[test]
 fn unconfirmed_requested_state_is_never_saved_or_published() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "registration state unavailable",
     ));
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(false));
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(false));
     let before = coordinator.current();
     let subscription = coordinator.subscribe();
 
     let error = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate.settings.close_to_tray = false;
             candidate
         })
@@ -576,11 +575,11 @@ fn unconfirmed_requested_state_is_never_saved_or_published() {
 
     assert!(matches!(
         error,
-        ConfigCoordinatorError::UnconfirmedStartWithWindows { .. }
+        ConfigCoordinatorError::UnconfirmedLaunchAtLogin { .. }
     ));
     assert!(matches!(
         &error.warnings()[0],
-        ConfigWarning::StartWithWindows {
+        ConfigWarning::LaunchAtLogin {
             desired: true,
             confirmed: None,
             ..
@@ -671,15 +670,15 @@ fn reload_failure_leaves_prior_publication_unchanged() {
 
 #[test]
 fn reload_with_unconfirmed_startup_state_rolls_back_without_saving_or_publishing() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
     let mut external = EditableConfig::default();
-    external.settings.start_with_windows = true;
+    external.settings.launch_at_login = true;
     external.settings.close_to_tray = false;
     store.set_disk(external.clone());
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "startup state unavailable",
     ));
-    start_with_windows.push(StartWithWindowsOutcome::confirmed(false));
+    launch_at_login.push(LaunchAtLoginOutcome::confirmed(false));
     let before = coordinator.current();
     let subscription = coordinator.subscribe();
 
@@ -687,11 +686,11 @@ fn reload_with_unconfirmed_startup_state_rolls_back_without_saving_or_publishing
 
     assert!(matches!(
         error,
-        ConfigCoordinatorError::UnconfirmedStartWithWindows { .. }
+        ConfigCoordinatorError::UnconfirmedLaunchAtLogin { .. }
     ));
     assert!(matches!(
         &error.warnings()[0],
-        ConfigWarning::StartWithWindows {
+        ConfigWarning::LaunchAtLogin {
             desired: true,
             confirmed: None,
             ..
@@ -709,14 +708,14 @@ fn reload_with_unconfirmed_startup_state_rolls_back_without_saving_or_publishing
 
 #[test]
 fn reload_reports_when_rollback_after_unconfirmed_state_is_also_unconfirmed() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
     let mut external = EditableConfig::default();
-    external.settings.start_with_windows = true;
+    external.settings.launch_at_login = true;
     store.set_disk(external.clone());
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "startup state unavailable",
     ));
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "rollback state unavailable",
     ));
 
@@ -724,12 +723,12 @@ fn reload_reports_when_rollback_after_unconfirmed_state_is_also_unconfirmed() {
 
     assert!(matches!(
         error,
-        ConfigCoordinatorError::UnconfirmedStartWithWindows { .. }
+        ConfigCoordinatorError::UnconfirmedLaunchAtLogin { .. }
     ));
     assert_rollback_warning(&error.warnings()[1], false, true, None);
     assert!(matches!(
         &error.warnings()[1],
-        ConfigWarning::StartWithWindowsRollback {
+        ConfigWarning::LaunchAtLoginRollback {
             message: Some(message),
             ..
         } if message == "rollback state unavailable"
@@ -746,27 +745,26 @@ fn reload_reports_when_rollback_after_unconfirmed_state_is_also_unconfirmed() {
 fn initial_load_reports_unconfirmed_state_without_fabricating_a_rollback_target() {
     let events = Events::default();
     let mut initial = EditableConfig::default();
-    initial.settings.start_with_windows = true;
+    initial.settings.launch_at_login = true;
     let store = Arc::new(FakeStore::new(initial.clone(), Arc::clone(&events)));
-    let start_with_windows = Arc::new(FakeStartWithWindows::new(Arc::clone(&events)));
-    start_with_windows.push(StartWithWindowsOutcome::unconfirmed(
+    let launch_at_login = Arc::new(FakeLaunchAtLogin::new(Arc::clone(&events)));
+    launch_at_login.push(LaunchAtLoginOutcome::unconfirmed(
         "startup state unavailable",
     ));
 
-    let error = match ConfigCoordinator::initial_load_with_store(store.clone(), start_with_windows)
-    {
+    let error = match ConfigCoordinator::initial_load_with_store(store.clone(), launch_at_login) {
         Ok(_) => panic!("unconfirmed initial state must fail"),
         Err(error) => error,
     };
 
     assert!(matches!(
         error,
-        ConfigCoordinatorError::UnconfirmedStartWithWindows { .. }
+        ConfigCoordinatorError::UnconfirmedLaunchAtLogin { .. }
     ));
     assert_eq!(error.warnings().len(), 1);
     assert!(matches!(
         &error.warnings()[0],
-        ConfigWarning::StartWithWindows {
+        ConfigWarning::LaunchAtLogin {
             desired: true,
             confirmed: None,
             ..
@@ -778,19 +776,19 @@ fn initial_load_reports_unconfirmed_state_without_fabricating_a_rollback_target(
 
 #[test]
 fn failed_enable_preserves_other_edits_and_persists_confirmed_false() {
-    let (coordinator, store, start_with_windows, _) = coordinator(EditableConfig::default());
-    start_with_windows.push(StartWithWindowsOutcome::warning(false, "access denied"));
+    let (coordinator, store, launch_at_login, _) = coordinator(EditableConfig::default());
+    launch_at_login.push(LaunchAtLoginOutcome::warning(false, "access denied"));
 
     let published = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = true;
+            candidate.settings.launch_at_login = true;
             candidate.settings.close_to_tray = false;
             candidate
         })
         .unwrap();
 
-    assert!(!published.editable().settings.start_with_windows);
+    assert!(!published.editable().settings.launch_at_login);
     assert!(!published.editable().settings.close_to_tray);
     assert_eq!(store.disk(), *published.editable().as_ref());
     assert_start_warning(&published.warnings()[0], true, false);
@@ -799,20 +797,20 @@ fn failed_enable_preserves_other_edits_and_persists_confirmed_false() {
 #[test]
 fn failed_disable_preserves_other_edits_and_persists_confirmed_true() {
     let mut initial = EditableConfig::default();
-    initial.settings.start_with_windows = true;
-    let (coordinator, store, start_with_windows, _) = coordinator(initial);
-    start_with_windows.push(StartWithWindowsOutcome::warning(true, "removal failed"));
+    initial.settings.launch_at_login = true;
+    let (coordinator, store, launch_at_login, _) = coordinator(initial);
+    launch_at_login.push(LaunchAtLoginOutcome::warning(true, "removal failed"));
 
     let published = coordinator
         .update(INITIAL_REVISION, {
             let mut candidate = coordinator.editable_at_revision(INITIAL_REVISION).unwrap();
-            candidate.settings.start_with_windows = false;
+            candidate.settings.launch_at_login = false;
             candidate.settings.start_minimized = false;
             candidate
         })
         .unwrap();
 
-    assert!(published.editable().settings.start_with_windows);
+    assert!(published.editable().settings.launch_at_login);
     assert!(!published.editable().settings.start_minimized);
     assert_eq!(store.disk(), *published.editable().as_ref());
     assert_start_warning(&published.warnings()[0], false, true);
@@ -822,29 +820,29 @@ fn failed_disable_preserves_other_edits_and_persists_confirmed_true() {
 fn initial_load_and_reload_save_applied_setting_corrections_before_publication() {
     let events = Events::default();
     let mut initial = EditableConfig::default();
-    initial.settings.start_with_windows = true;
+    initial.settings.launch_at_login = true;
     let store = Arc::new(FakeStore::new(initial, Arc::clone(&events)));
-    let start_with_windows = Arc::new(FakeStartWithWindows::new(Arc::clone(&events)));
-    start_with_windows.push(StartWithWindowsOutcome::warning(false, "startup failed"));
+    let launch_at_login = Arc::new(FakeLaunchAtLogin::new(Arc::clone(&events)));
+    launch_at_login.push(LaunchAtLoginOutcome::warning(false, "startup failed"));
 
     let coordinator =
-        ConfigCoordinator::initial_load_with_store(store.clone(), start_with_windows.clone())
+        ConfigCoordinator::initial_load_with_store(store.clone(), launch_at_login.clone())
             .expect("corrected initial load");
-    assert!(!coordinator.current().editable().settings.start_with_windows);
-    assert!(!store.disk().settings.start_with_windows);
+    assert!(!coordinator.current().editable().settings.launch_at_login);
+    assert!(!store.disk().settings.launch_at_login);
     assert_start_warning(&coordinator.current().warnings()[0], true, false);
     assert_eq!(event_snapshot(&events), ["load", "reconcile:true", "save"]);
 
     clear(&events);
     let mut external = EditableConfig::default();
-    external.settings.start_with_windows = true;
+    external.settings.launch_at_login = true;
     external.settings.close_to_tray = false;
     store.set_disk(external);
-    start_with_windows.push(StartWithWindowsOutcome::warning(false, "reload failed"));
+    launch_at_login.push(LaunchAtLoginOutcome::warning(false, "reload failed"));
 
     let reloaded = coordinator.reload().unwrap();
     assert_eq!(reloaded.revision(), INITIAL_REVISION + 1);
-    assert!(!reloaded.editable().settings.start_with_windows);
+    assert!(!reloaded.editable().settings.launch_at_login);
     assert!(!reloaded.editable().settings.close_to_tray);
     assert_eq!(store.disk(), *reloaded.editable().as_ref());
     assert_start_warning(&reloaded.warnings()[0], true, false);
@@ -853,16 +851,13 @@ fn initial_load_and_reload_save_applied_setting_corrections_before_publication()
 
 #[test]
 fn correction_save_failure_reports_warning_without_claiming_disk_or_publication_changed() {
-    let (coordinator, store, start_with_windows, events) = coordinator(EditableConfig::default());
+    let (coordinator, store, launch_at_login, events) = coordinator(EditableConfig::default());
     let mut external = EditableConfig::default();
-    external.settings.start_with_windows = true;
+    external.settings.launch_at_login = true;
     external.settings.close_to_tray = false;
     store.set_disk(external.clone());
     store.fail_save();
-    start_with_windows.push(StartWithWindowsOutcome::warning(
-        false,
-        "registration missing",
-    ));
+    launch_at_login.push(LaunchAtLoginOutcome::warning(false, "registration missing"));
     let before = coordinator.current();
     let subscription = coordinator.subscribe();
 

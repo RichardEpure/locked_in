@@ -9,14 +9,15 @@ use std::{
 };
 
 use super::*;
-use crate::config::{
-    ApplicationPaths, ConfigCoordinator, Device, StartWithWindows, StartWithWindowsOutcome,
+use crate::{
+    config::{ApplicationPaths, ConfigCoordinator, Device},
+    platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
 };
 
 struct ConfirmedStartup;
-impl StartWithWindows for ConfirmedStartup {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
-        StartWithWindowsOutcome::confirmed(desired)
+impl LaunchAtLogin for ConfirmedStartup {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
+        LaunchAtLoginOutcome::confirmed(desired)
     }
 }
 

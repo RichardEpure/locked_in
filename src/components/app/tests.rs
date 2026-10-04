@@ -9,8 +9,9 @@ use std::{
 };
 
 use super::*;
-use crate::config::{
-    ConfigCoordinator, ConfigStore, LogLevel, StartWithWindows, StartWithWindowsOutcome,
+use crate::{
+    config::{ConfigCoordinator, ConfigStore, LogLevel},
+    platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -38,12 +39,12 @@ impl Drop for TestDirectory {
 #[derive(Default)]
 struct WarningStartup(AtomicBool);
 
-impl StartWithWindows for WarningStartup {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
+impl LaunchAtLogin for WarningStartup {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
         if self.0.swap(false, Ordering::SeqCst) {
-            StartWithWindowsOutcome::warning(desired, "current publication warning")
+            LaunchAtLoginOutcome::warning(desired, "current publication warning")
         } else {
-            StartWithWindowsOutcome::confirmed(desired)
+            LaunchAtLoginOutcome::confirmed(desired)
         }
     }
 }
@@ -122,7 +123,6 @@ fn focused_window_bridge_projects_the_current_value_before_waiting_for_changes()
     let (publisher, mut receiver) = tokio::sync::watch::channel(ForegroundObservation::default());
     publisher.send_replace(ForegroundObservation {
         generation: 2,
-        raw_hwnd: 42,
         window: current.clone(),
     });
     let projected = RefCell::new(None);

@@ -8,15 +8,18 @@ use std::{
 };
 
 use super::*;
-use crate::config::{AutomationCase, ConfigStore, StartWithWindows, StartWithWindowsOutcome};
+use crate::{
+    config::{AutomationCase, ConfigStore},
+    platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
+};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct ConfirmedStartup;
 
-impl StartWithWindows for ConfirmedStartup {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
-        StartWithWindowsOutcome::confirmed(desired)
+impl LaunchAtLogin for ConfirmedStartup {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
+        LaunchAtLoginOutcome::confirmed(desired)
     }
 }
 

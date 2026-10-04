@@ -8,6 +8,10 @@ use std::{
 use anyhow::Result;
 use tokio::sync::watch;
 
+use crate::platform::autostart::LaunchAtLogin;
+#[cfg(test)]
+use crate::platform::autostart::LaunchAtLoginOutcome;
+
 use super::{CompiledConfig, EditableConfig, ValidationError, store::ConfigStore};
 
 const INITIAL_REVISION: u64 = 1;
@@ -29,67 +33,14 @@ impl CoordinatorStore for ConfigStore {
     }
 }
 
-/// Applies and confirms the Windows startup setting synchronously.
-///
-/// `current` and `subscribe` may be called from an implementation. Same-thread mutation reentry
-/// is rejected. Implementations must not wait for another thread to call `update` or `reload` on
-/// the same coordinator because durable operations are intentionally serialized.
-pub trait StartWithWindows: Send + Sync {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartWithWindowsState {
-    Confirmed(bool),
-    Unconfirmed,
-}
-
-impl StartWithWindowsState {
-    fn confirmed(self) -> Option<bool> {
-        match self {
-            Self::Confirmed(confirmed) => Some(confirmed),
-            Self::Unconfirmed => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartWithWindowsOutcome {
-    pub state: StartWithWindowsState,
-    pub warning: Option<String>,
-}
-
-impl StartWithWindowsOutcome {
-    pub fn confirmed(confirmed: bool) -> Self {
-        Self {
-            state: StartWithWindowsState::Confirmed(confirmed),
-            warning: None,
-        }
-    }
-
-    pub fn warning(confirmed: bool, warning: impl Into<String>) -> Self {
-        Self {
-            state: StartWithWindowsState::Confirmed(confirmed),
-            warning: Some(warning.into()),
-        }
-    }
-
-    pub fn unconfirmed(warning: impl Into<String>) -> Self {
-        Self {
-            state: StartWithWindowsState::Unconfirmed,
-            warning: Some(warning.into()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigWarning {
-    StartWithWindows {
+    LaunchAtLogin {
         desired: bool,
         confirmed: Option<bool>,
         message: Option<String>,
     },
-    StartWithWindowsRollback {
+    LaunchAtLoginRollback {
         target: bool,
         attempted: bool,
         confirmed: Option<bool>,
@@ -153,7 +104,7 @@ impl Display for StoreOperation {
             Self::InitialLoad => "initial configuration load",
             Self::Reload => "configuration reload",
             Self::Save => "configuration save",
-            Self::CorrectionSave => "Start with Windows correction save",
+            Self::CorrectionSave => "launch-at-login correction save",
         })
     }
 }
@@ -170,7 +121,7 @@ pub enum ConfigCoordinatorError {
         errors: Vec<ValidationError>,
         warnings: Box<[ConfigWarning]>,
     },
-    UnconfirmedStartWithWindows {
+    UnconfirmedLaunchAtLogin {
         warnings: Box<[ConfigWarning]>,
     },
     Store {
@@ -184,7 +135,7 @@ impl ConfigCoordinatorError {
     pub fn warnings(&self) -> &[ConfigWarning] {
         match self {
             Self::InvalidConfig { warnings, .. }
-            | Self::UnconfirmedStartWithWindows { warnings }
+            | Self::UnconfirmedLaunchAtLogin { warnings }
             | Self::Store { warnings, .. } => warnings,
             Self::StaleRevision { .. } | Self::ReentrantOperation | Self::RevisionOverflow => &[],
         }
@@ -209,8 +160,8 @@ impl Display for ConfigCoordinatorError {
                 }
                 Ok(())
             }
-            Self::UnconfirmedStartWithWindows { .. } => formatter.write_str(
-                "Start with Windows state could not be confirmed; configuration was not saved or published",
+            Self::UnconfirmedLaunchAtLogin { .. } => formatter.write_str(
+                "Launch-at-login state could not be confirmed; configuration was not saved or published",
             ),
             Self::Store {
                 operation,
@@ -220,7 +171,7 @@ impl Display for ConfigCoordinatorError {
                 write!(formatter, "{operation} failed: {source:#}")?;
                 if *operation == StoreOperation::CorrectionSave {
                     formatter.write_str(
-                        "; the confirmed Start with Windows state was not published and disk was not reported as corrected",
+                        "; the confirmed launch-at-login state was not published and disk was not reported as corrected",
                     )?;
                 }
                 Ok(())
@@ -293,7 +244,7 @@ impl Drop for OperationGuard<'_> {
 
 pub struct ConfigCoordinator {
     store: Arc<dyn CoordinatorStore>,
-    start_with_windows: Arc<dyn StartWithWindows>,
+    launch_at_login: Arc<dyn LaunchAtLogin>,
     admission: OperationAdmission,
     publications: watch::Sender<Arc<PublishedConfig>>,
 }
@@ -301,22 +252,22 @@ pub struct ConfigCoordinator {
 impl ConfigCoordinator {
     pub fn initial_load(
         store: Arc<ConfigStore>,
-        start_with_windows: Arc<dyn StartWithWindows>,
+        launch_at_login: Arc<dyn LaunchAtLogin>,
     ) -> std::result::Result<Self, ConfigCoordinatorError> {
-        Self::initial_load_from(store, start_with_windows)
+        Self::initial_load_from(store, launch_at_login)
     }
 
     #[cfg(test)]
     fn initial_load_with_store(
         store: Arc<dyn CoordinatorStore>,
-        start_with_windows: Arc<dyn StartWithWindows>,
+        launch_at_login: Arc<dyn LaunchAtLogin>,
     ) -> std::result::Result<Self, ConfigCoordinatorError> {
-        Self::initial_load_from(store, start_with_windows)
+        Self::initial_load_from(store, launch_at_login)
     }
 
     fn initial_load_from(
         store: Arc<dyn CoordinatorStore>,
-        start_with_windows: Arc<dyn StartWithWindows>,
+        launch_at_login: Arc<dyn LaunchAtLogin>,
     ) -> std::result::Result<Self, ConfigCoordinatorError> {
         let editable = store
             .load()
@@ -325,12 +276,12 @@ impl ConfigCoordinator {
                 source,
                 warnings: Box::new([]),
             })?;
-        let prepared = prepare_loaded(editable, None, store.as_ref(), start_with_windows.as_ref())?;
+        let prepared = prepare_loaded(editable, None, store.as_ref(), launch_at_login.as_ref())?;
         let current = Arc::new(prepared.publish(INITIAL_REVISION));
         let (publications, _) = watch::channel(current);
         Ok(Self {
             store,
-            start_with_windows,
+            launch_at_login,
             admission: OperationAdmission::default(),
             publications,
         })
@@ -367,7 +318,7 @@ impl ConfigCoordinator {
             .revision
             .checked_add(1)
             .ok_or(ConfigCoordinatorError::RevisionOverflow)?;
-        // Settings are not part of the compiled rules, so Windows reconciliation can
+        // Settings are not part of the compiled rules, so launch-at-login reconciliation can
         // correct its confirmed boolean without invalidating the prepared rules.
         let compiled = CompiledConfig::compile(&candidate).map_err(|errors| {
             ConfigCoordinatorError::InvalidConfig {
@@ -379,15 +330,15 @@ impl ConfigCoordinator {
         let prepared = prepare_update(
             candidate,
             compiled,
-            current.editable.settings.start_with_windows,
+            current.editable.settings.launch_at_login,
             self.store.as_ref(),
-            self.start_with_windows.as_ref(),
+            self.launch_at_login.as_ref(),
         )?;
         Ok(self.publish(next_revision, prepared))
     }
 
     /// Reload publishes only bytes that loaded strictly and, when needed, whose corrected
-    /// Start-with-Windows value was saved. A failed correction is returned with its warning and
+    /// launch-at-login value was saved. A failed correction is returned with its warning and
     /// leaves the previous publication in place; it does not claim that disk matches the OS.
     pub fn reload(&self) -> std::result::Result<Arc<PublishedConfig>, ConfigCoordinatorError> {
         let _operation = self.admission.enter()?;
@@ -406,9 +357,9 @@ impl ConfigCoordinator {
             })?;
         let prepared = prepare_loaded(
             editable,
-            Some(current.editable.settings.start_with_windows),
+            Some(current.editable.settings.launch_at_login),
             self.store.as_ref(),
-            self.start_with_windows.as_ref(),
+            self.launch_at_login.as_ref(),
         )?;
         Ok(self.publish(next_revision, prepared))
     }
@@ -446,9 +397,9 @@ impl PreparedConfig {
 
 fn prepare_loaded(
     mut editable: EditableConfig,
-    previous_start_with_windows: Option<bool>,
+    previous_launch_at_login: Option<bool>,
     store: &dyn CoordinatorStore,
-    start_with_windows: &dyn StartWithWindows,
+    launch_at_login: &dyn LaunchAtLogin,
 ) -> std::result::Result<PreparedConfig, ConfigCoordinatorError> {
     let compiled = CompiledConfig::compile(&editable).map_err(|errors| {
         ConfigCoordinatorError::InvalidConfig {
@@ -456,19 +407,19 @@ fn prepare_loaded(
             warnings: Box::new([]),
         }
     })?;
-    let desired = editable.settings.start_with_windows;
-    let reconciliation = reconcile(start_with_windows, desired);
+    let desired = editable.settings.launch_at_login;
+    let reconciliation = reconcile(launch_at_login, desired);
     let mut warnings = reconciliation.warning.into_iter().collect::<Vec<_>>();
     let Some(confirmed) = reconciliation.confirmed else {
-        if let Some(previous) = previous_start_with_windows {
-            warnings.push(rollback(start_with_windows, previous));
+        if let Some(previous) = previous_launch_at_login {
+            warnings.push(rollback(launch_at_login, previous));
         }
-        return Err(ConfigCoordinatorError::UnconfirmedStartWithWindows {
+        return Err(ConfigCoordinatorError::UnconfirmedLaunchAtLogin {
             warnings: warnings.into_boxed_slice(),
         });
     };
     let needs_correction = desired != confirmed;
-    editable.settings.start_with_windows = confirmed;
+    editable.settings.launch_at_login = confirmed;
 
     if needs_correction {
         store
@@ -490,31 +441,31 @@ fn prepare_loaded(
 fn prepare_update(
     mut editable: EditableConfig,
     compiled: CompiledConfig,
-    previous_start_with_windows: bool,
+    previous_launch_at_login: bool,
     store: &dyn CoordinatorStore,
-    start_with_windows: &dyn StartWithWindows,
+    launch_at_login: &dyn LaunchAtLogin,
 ) -> std::result::Result<PreparedConfig, ConfigCoordinatorError> {
-    let desired = editable.settings.start_with_windows;
-    let reconciliation = reconcile(start_with_windows, desired);
+    let desired = editable.settings.launch_at_login;
+    let reconciliation = reconcile(launch_at_login, desired);
     let mut warnings = reconciliation.warning.into_iter().collect::<Vec<_>>();
     let Some(confirmed) = reconciliation.confirmed else {
-        warnings.push(rollback(start_with_windows, previous_start_with_windows));
-        return Err(ConfigCoordinatorError::UnconfirmedStartWithWindows {
+        warnings.push(rollback(launch_at_login, previous_launch_at_login));
+        return Err(ConfigCoordinatorError::UnconfirmedLaunchAtLogin {
             warnings: warnings.into_boxed_slice(),
         });
     };
-    editable.settings.start_with_windows = confirmed;
+    editable.settings.launch_at_login = confirmed;
 
     if let Err(source) = store.save(&editable) {
-        warnings.push(if confirmed == previous_start_with_windows {
-            ConfigWarning::StartWithWindowsRollback {
-                target: previous_start_with_windows,
+        warnings.push(if confirmed == previous_launch_at_login {
+            ConfigWarning::LaunchAtLoginRollback {
+                target: previous_launch_at_login,
                 attempted: false,
                 confirmed: Some(confirmed),
                 message: None,
             }
         } else {
-            rollback(start_with_windows, previous_start_with_windows)
+            rollback(launch_at_login, previous_launch_at_login)
         });
         return Err(ConfigCoordinatorError::Store {
             operation: StoreOperation::Save,
@@ -535,11 +486,11 @@ struct Reconciliation {
     warning: Option<ConfigWarning>,
 }
 
-fn reconcile(start_with_windows: &dyn StartWithWindows, desired: bool) -> Reconciliation {
-    let outcome = start_with_windows.reconcile(desired);
+fn reconcile(launch_at_login: &dyn LaunchAtLogin, desired: bool) -> Reconciliation {
+    let outcome = launch_at_login.reconcile(desired);
     let confirmed = outcome.state.confirmed();
     let warning = if confirmed != Some(desired) || outcome.warning.is_some() {
-        Some(ConfigWarning::StartWithWindows {
+        Some(ConfigWarning::LaunchAtLogin {
             desired,
             confirmed,
             message: outcome.warning,
@@ -550,9 +501,9 @@ fn reconcile(start_with_windows: &dyn StartWithWindows, desired: bool) -> Reconc
     Reconciliation { confirmed, warning }
 }
 
-fn rollback(start_with_windows: &dyn StartWithWindows, target: bool) -> ConfigWarning {
-    let outcome = start_with_windows.reconcile(target);
-    ConfigWarning::StartWithWindowsRollback {
+fn rollback(launch_at_login: &dyn LaunchAtLogin, target: bool) -> ConfigWarning {
+    let outcome = launch_at_login.reconcile(target);
+    ConfigWarning::LaunchAtLoginRollback {
         target,
         attempted: true,
         confirmed: outcome.state.confirmed(),

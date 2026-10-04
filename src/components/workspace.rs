@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Settings, Usb, Workflow};
 
@@ -7,7 +5,7 @@ use super::capture;
 use crate::{
     ConfigurationLoadError, DIRTY_EDITOR_SIGNAL,
     automation_runtime::{AutomationRuntime, RuntimePhase},
-    config,
+    config, platform,
 };
 
 use self::{
@@ -33,6 +31,7 @@ enum Section {
 pub(super) fn Workspace() -> Element {
     let load_error = consume_context::<Option<ConfigurationLoadError>>();
     let paths = consume_context::<config::ApplicationPaths>();
+    let mut open_error = use_signal(|| None::<String>);
     if let Some(ConfigurationLoadError {
         message,
         config_path_available,
@@ -46,7 +45,12 @@ pub(super) fn Workspace() -> Element {
                     p { "Locked In is running without active configuration and will not overwrite an existing configuration file. Correct the startup error, then restart the application." }
                     pre { "{message}" }
                     if config_path_available {
-                        button { class: "button secondary", onclick: move |_| { let _ = Command::new("notepad.exe").arg(&config_path).spawn(); }, "Open config file" }
+                        button { class: "button secondary", onclick: move |_| {
+                            open_error.set(platform::desktop::edit_file(&config_path).err().map(|error| format!("{error:#}")));
+                        }, "Open config file" }
+                    }
+                    if let Some(error) = open_error() {
+                        p { class: "message error", role: "status", "{error}" }
                     }
                 }
             }

@@ -9,9 +9,9 @@ use std::{
 };
 
 use super::*;
-use crate::config::{
-    Automation, ConfigCoordinator, ConfigCoordinatorError, ConfigStore, Device, StartWithWindows,
-    StartWithWindowsOutcome,
+use crate::{
+    config::{Automation, ConfigCoordinator, ConfigCoordinatorError, ConfigStore, Device},
+    platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -37,21 +37,21 @@ impl Drop for TestDirectory {
 }
 
 #[derive(Default)]
-struct StartupOutcomes(Mutex<VecDeque<StartWithWindowsOutcome>>);
+struct StartupOutcomes(Mutex<VecDeque<LaunchAtLoginOutcome>>);
 
 impl StartupOutcomes {
-    fn push(&self, outcome: StartWithWindowsOutcome) {
+    fn push(&self, outcome: LaunchAtLoginOutcome) {
         self.0.lock().unwrap().push_back(outcome);
     }
 }
 
-impl StartWithWindows for StartupOutcomes {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
+impl LaunchAtLogin for StartupOutcomes {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
         self.0
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| StartWithWindowsOutcome::confirmed(desired))
+            .unwrap_or_else(|| LaunchAtLoginOutcome::confirmed(desired))
     }
 }
 
@@ -148,16 +148,16 @@ fn stale_save_and_reload_error_keep_the_durable_publication() {
 fn failed_startup_change_persists_confirmed_state_and_surfaces_a_warning() {
     let (_directory, store, startup, coordinator) = coordinator();
     let initial = coordinator.current();
-    startup.push(StartWithWindowsOutcome::warning(false, "access denied"));
+    startup.push(LaunchAtLoginOutcome::warning(false, "access denied"));
     let mut settings = initial.editable().settings.clone();
-    settings.start_with_windows = true;
+    settings.launch_at_login = true;
     settings.start_minimized = false;
     settings.close_to_tray = false;
 
     let published = save_settings(&coordinator, initial.revision(), settings).unwrap();
     let warning = config_warning_message(published.warnings()).unwrap();
 
-    assert!(!published.editable().settings.start_with_windows);
+    assert!(!published.editable().settings.launch_at_login);
     assert!(!published.editable().settings.start_minimized);
     assert!(!published.editable().settings.close_to_tray);
     assert_eq!(
@@ -172,17 +172,14 @@ fn failed_startup_change_persists_confirmed_state_and_surfaces_a_warning() {
 fn reload_correction_warning_is_available_to_the_settings_ui() {
     let (_directory, store, startup, coordinator) = coordinator();
     let mut external = coordinator.current().editable().as_ref().clone();
-    external.settings.start_with_windows = true;
+    external.settings.launch_at_login = true;
     store.save_for_test(&external).unwrap();
-    startup.push(StartWithWindowsOutcome::warning(
-        false,
-        "registration missing",
-    ));
+    startup.push(LaunchAtLoginOutcome::warning(false, "registration missing"));
 
     let published = coordinator.reload().unwrap();
     let warning = config_warning_message(published.warnings()).unwrap();
 
-    assert!(!published.editable().settings.start_with_windows);
+    assert!(!published.editable().settings.launch_at_login);
     assert!(warning.contains("could not be enabled"));
     assert!(warning.contains("registration missing"));
 }

@@ -8,6 +8,7 @@ use std::{
 };
 
 use super::*;
+use crate::platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -15,41 +16,10 @@ struct CountingStartup {
     calls: AtomicUsize,
 }
 
-#[test]
-fn startup_apply_failure_uses_the_confirmed_registry_state() {
-    let outcome =
-        reconcile_start_with_windows(true, |_| anyhow::bail!("access denied"), || Ok(false));
-
-    assert_eq!(
-        outcome.state,
-        config::StartWithWindowsState::Confirmed(false)
-    );
-    assert!(
-        outcome
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("access denied"))
-    );
-}
-
-#[test]
-fn startup_apply_and_registry_query_failure_is_unconfirmed() {
-    let outcome = reconcile_start_with_windows(
-        false,
-        |_| anyhow::bail!("delete failed"),
-        || anyhow::bail!("query failed"),
-    );
-
-    assert_eq!(outcome.state, config::StartWithWindowsState::Unconfirmed);
-    assert!(outcome.warning.as_deref().is_some_and(|warning| {
-        warning.contains("delete failed") && warning.contains("query failed")
-    }));
-}
-
-impl config::StartWithWindows for CountingStartup {
-    fn reconcile(&self, desired: bool) -> config::StartWithWindowsOutcome {
+impl LaunchAtLogin for CountingStartup {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        config::StartWithWindowsOutcome::confirmed(desired)
+        LaunchAtLoginOutcome::confirmed(desired)
     }
 }
 
@@ -81,7 +51,7 @@ fn successful_startup_uses_coordinator_settings_and_preserves_visibility_policy(
     let store = Arc::new(config::ConfigStore::new(paths.config_path()));
     let mut candidate = config::EditableConfig::default();
     candidate.settings.start_minimized = true;
-    candidate.settings.start_with_windows = true;
+    candidate.settings.launch_at_login = true;
     candidate.settings.log_level = config::LogLevel::Debug;
     store.save_for_test(&candidate).unwrap();
     let startup = Arc::new(CountingStartup {
@@ -121,7 +91,7 @@ fn semantic_load_failure_keeps_config_accessible_without_registration_or_rewrite
     let config_path = directory.0.join("config.toml");
     let store = Arc::new(config::ConfigStore::new(&config_path));
     let mut candidate = config::EditableConfig::default();
-    candidate.settings.start_with_windows = true;
+    candidate.settings.launch_at_login = true;
     candidate.devices.push(config::Device {
         id: "invalid-device".into(),
         report_length: 0,

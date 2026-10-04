@@ -1,4 +1,4 @@
-use std::{process::Command, sync::Arc};
+use std::sync::Arc;
 
 use dioxus::prelude::*;
 
@@ -9,6 +9,7 @@ use crate::{
         self, ConfigCoordinator, ConfigCoordinatorError, ConfigWarning, LogLevel, PublishedConfig,
         Settings,
     },
+    platform,
 };
 
 #[component]
@@ -64,13 +65,17 @@ pub(super) fn SettingsView() -> Element {
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "01" } div { h3 { "Startup and tray" } p { "Locked In continues running when its window is closed" } } }
                     label { class: "setting-row", div { strong { "Start minimized" } small { "Hide the window after launch" } } input { type: "checkbox", checked: snapshot.start_minimized, onchange: move |event| draft.write().start_minimized = event.checked() } }
                     label { class: "setting-row", div { strong { "Close to tray" } small { "Keep automations active after closing the window" } } input { type: "checkbox", checked: snapshot.close_to_tray, onchange: move |event| draft.write().close_to_tray = event.checked() } }
-                    label { class: "setting-row", div { strong { "Start with Windows" } small { "Launch Locked In when you sign in to Windows" } } input { type: "checkbox", checked: snapshot.start_with_windows, onchange: move |event| draft.write().start_with_windows = event.checked() } }
+                    label { class: "setting-row", div { strong { "Start with Windows" } small { "Launch Locked In when you sign in to Windows" } } input { type: "checkbox", checked: snapshot.launch_at_login, onchange: move |event| draft.write().launch_at_login = event.checked() } }
                 }
                 section { class: "editor-card", div { class: "section-heading", span { class: "step", "02" } div { h3 { "Configuration" } p { "Open the TOML file, then reload changes from disk" } } }
                     div { class: "settings-actions",
                         button { class: "button secondary", onclick: {
                             let config_path = paths.config_path();
-                            move |_| { let _ = Command::new("notepad.exe").arg(&config_path).spawn(); }
+                            move |_| {
+                                if let Err(error) = platform::desktop::edit_file(&config_path) {
+                                    message.set(Some(("message error", format!("{error:#}"))));
+                                }
+                            }
                         }, "Open config file" }
                         button { class: "button secondary", onclick: {
                             let coordinator = coordinator.clone();
@@ -98,7 +103,11 @@ pub(super) fn SettingsView() -> Element {
                     div { class: "form-grid two", label { "Log level" select { value: log_level_name(snapshot.log_level), onchange: move |event| draft.write().log_level = parse_log_level(&event.value()), option { value: "error", "Error" } option { value: "info", "Info" } option { value: "debug", "Debug" } } }
                         div { class: "settings-actions align-end", button { class: "button secondary", onclick: {
                             let log_directory = paths.log_directory();
-                            move |_| { let _ = Command::new("explorer.exe").arg(&log_directory).spawn(); }
+                            move |_| {
+                                if let Err(error) = platform::desktop::open_directory(&log_directory) {
+                                    message.set(Some(("message error", format!("{error:#}"))));
+                                }
+                            }
                         }, "Open log folder" } }
                     }
                 }
@@ -163,7 +172,7 @@ fn config_warning_message(warnings: &[ConfigWarning]) -> Option<String> {
     let messages = warnings
         .iter()
         .map(|warning| match warning {
-            ConfigWarning::StartWithWindows {
+            ConfigWarning::LaunchAtLogin {
                 desired,
                 confirmed,
                 message,
@@ -188,7 +197,7 @@ fn config_warning_message(warnings: &[ConfigWarning]) -> Option<String> {
                     .map_or_else(String::new, |message| format!(": {message}"));
                 format!("{outcome}. {confirmed}{detail}")
             }
-            ConfigWarning::StartWithWindowsRollback {
+            ConfigWarning::LaunchAtLoginRollback {
                 target,
                 attempted,
                 confirmed,

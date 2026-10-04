@@ -10,6 +10,5 @@ pub struct FocusedWindow {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ForegroundObservation {
     pub generation: u64,
-    pub raw_hwnd: isize,
     pub window: FocusedWindow,
 }

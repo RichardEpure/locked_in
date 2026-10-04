@@ -6,7 +6,7 @@ mod config;
 mod event;
 mod focused_window;
 mod hid;
-mod win;
+mod platform;
 
 use std::{io::Write, path::Path, sync::Arc};
 
@@ -17,7 +17,7 @@ use dioxus::{
 };
 
 pub static FOCUSED_WINDOW_SIGNAL: GlobalSignal<focused_window::FocusedWindow> =
-    Signal::global(win::get_focused_window);
+    Signal::global(|| platform::foreground::get().current().window);
 pub static DIRTY_EDITOR_SIGNAL: GlobalSignal<Option<String>> = Signal::global(|| None);
 
 #[derive(Debug, Clone)]
@@ -42,37 +42,6 @@ fn install_panic_log(log_path: std::path::PathBuf) {
             let _ = writeln!(file, "PANIC: {info}\nBACKTRACE:\n{bt}\n---\n");
         }
     }));
-}
-
-struct WindowsStartWithWindows;
-
-impl config::StartWithWindows for WindowsStartWithWindows {
-    fn reconcile(&self, desired: bool) -> config::StartWithWindowsOutcome {
-        reconcile_start_with_windows(
-            desired,
-            win::set_start_with_windows,
-            win::start_with_windows_enabled,
-        )
-    }
-}
-
-fn reconcile_start_with_windows(
-    desired: bool,
-    apply: impl FnOnce(bool) -> Result<()>,
-    inspect: impl FnOnce() -> Result<bool>,
-) -> config::StartWithWindowsOutcome {
-    match apply(desired) {
-        Ok(()) => config::StartWithWindowsOutcome::confirmed(desired),
-        Err(apply_error) => match inspect() {
-            Ok(confirmed) => config::StartWithWindowsOutcome::warning(
-                confirmed,
-                format!("Windows startup registration failed: {apply_error:#}"),
-            ),
-            Err(inspect_error) => config::StartWithWindowsOutcome::unconfirmed(format!(
-                "Windows startup registration failed: {apply_error:#}; the applied state could not be confirmed: {inspect_error:#}"
-            )),
-        },
-    }
 }
 
 fn prepare_application_paths() -> Result<PreparedApplicationPaths> {
@@ -137,9 +106,9 @@ fn initial_window_visible(
 
 fn load_initial_configuration(
     store: Arc<config::ConfigStore>,
-    start_with_windows: Arc<dyn config::StartWithWindows>,
+    launch_at_login: Arc<dyn platform::autostart::LaunchAtLogin>,
 ) -> Result<Arc<config::ConfigCoordinator>, ConfigurationLoadError> {
-    config::ConfigCoordinator::initial_load(store, start_with_windows)
+    config::ConfigCoordinator::initial_load(store, launch_at_login)
         .map(Arc::new)
         .map_err(|error| ConfigurationLoadError {
             message: format!("Configuration could not be loaded: {error}"),
@@ -167,7 +136,7 @@ fn main() {
     let _instance = if cfg!(debug_assertions) && visibility_override {
         None
     } else {
-        match win::claim_single_instance() {
+        match platform::instance::claim() {
             Ok(Some(instance)) => Some(instance),
             Ok(None) => return,
             Err(error) => {
@@ -199,7 +168,7 @@ fn main() {
 
     let initial = initialize_configuration(&prepared_paths, |paths| {
         let store = Arc::new(config::ConfigStore::new(paths.config_path()));
-        load_initial_configuration(store, Arc::new(WindowsStartWithWindows))
+        load_initial_configuration(store, Arc::new(platform::autostart::SystemLaunchAtLogin))
     });
     let (coordinator, configuration_load_error) = match initial {
         Ok(coordinator) => (Some(coordinator), None),
@@ -218,11 +187,14 @@ fn main() {
     }
 
     let publication_subscription = coordinator.as_ref().map(|value| value.subscribe());
-    let focus_events = win::subscribe_foreground_observations();
-    let (foreground_hook, focus_source) = match win::start_foreground_hook() {
-        Ok(hook) => (Some(hook), automation_runtime::EventSourceState::Available),
+    let focus_events = platform::foreground::get().subscribe();
+    let (foreground_monitor, focus_source) = match platform::foreground::start() {
+        Ok(monitor) => (
+            Some(monitor),
+            automation_runtime::EventSourceState::Available,
+        ),
         Err(error) => {
-            let message = format!("foreground hook failed: {error:#}");
+            let message = format!("foreground monitoring failed: {error:#}");
             app_log::write_error(&message);
             (
                 None,
@@ -264,11 +236,11 @@ fn main() {
         .with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides)
         .with_tray_icon_show_window_on_click(false);
     desktop_config = desktop_config.with_data_directory(paths.webview_data_directory());
-    let mut foreground_hook = foreground_hook;
+    let mut foreground_monitor = foreground_monitor;
     desktop_config = desktop_config.with_custom_event_handler(move |event, _| {
         if matches!(event, dioxus::desktop::tao::event::Event::LoopDestroyed) {
-            // WinEvent hooks must be unregistered on their registering thread.
-            drop(foreground_hook.take());
+            // Release native observation on its registering desktop thread.
+            drop(foreground_monitor.take());
         }
     });
     let lifecycle = Arc::new(application_lifecycle::ApplicationLifecycle::new(

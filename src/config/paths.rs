@@ -49,10 +49,7 @@ pub fn resolve_application_paths() -> Result<ApplicationPaths> {
             .map(ApplicationPaths::from_data_root)
             .context("Failed to get current directory");
     }
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| ApplicationPaths::from_data_root(path.join("LockedIn")))
-        .context("LOCALAPPDATA is unavailable")
+    crate::platform::locations::default_data_root().map(ApplicationPaths::from_data_root)
 }
 
 fn resolve_override(data_root: PathBuf) -> Result<ApplicationPaths> {

@@ -18,7 +18,7 @@ use crate::{
     application_lifecycle::ApplicationLifecycle,
     config::PublishedConfig,
     focused_window::{FocusedWindow, ForegroundObservation},
-    win,
+    platform,
 };
 
 use super::{
@@ -147,7 +147,7 @@ pub(crate) fn App() -> Element {
     });
 
     use_future(move || async move {
-        let mut receiver = win::subscribe_foreground_observations();
+        let mut receiver = platform::foreground::get().subscribe();
         publish_current_focused_window(&mut receiver, |focused| {
             *FOCUSED_WINDOW_SIGNAL.write() = focused;
         });

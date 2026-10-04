@@ -13,12 +13,10 @@ use std::{
 use crate::{
     automation_runtime::{EventSourceState, FocusInput, RuntimeInputs},
     components::PublishedConfigContext,
-    config::{
-        Automation, ConfigCoordinator, ConfigStore, Device, StartWithWindows,
-        StartWithWindowsOutcome,
-    },
+    config::{Automation, ConfigCoordinator, ConfigStore, Device},
     focused_window::ForegroundObservation,
     hid::{HidBackend, HidError, HidInventory},
+    platform::autostart::{LaunchAtLogin, LaunchAtLoginOutcome},
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -30,9 +28,9 @@ struct Fixture {
 
 struct ConfirmedStartup;
 
-impl StartWithWindows for ConfirmedStartup {
-    fn reconcile(&self, desired: bool) -> StartWithWindowsOutcome {
-        StartWithWindowsOutcome::confirmed(desired)
+impl LaunchAtLogin for ConfirmedStartup {
+    fn reconcile(&self, desired: bool) -> LaunchAtLoginOutcome {
+        LaunchAtLoginOutcome::confirmed(desired)
     }
 }
 
