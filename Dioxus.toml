@@ -27,4 +27,5 @@ resources = ["THIRD_PARTY_LICENSES.txt"]
 icon_path = "assets/favicon.ico"
 
 [bundle.windows.nsis]
+template = "installer/nsis-template.nsi"
 installer_hooks = "installer/nsis-hooks.nsh"
